@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEON//GRID — a walkable ASCII city</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: crosshair; }
+  #term {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #020604 0%, #000 75%);
+  }
+  #wrap { position: relative; overflow: hidden; border-radius: 10px; box-shadow: 0 0 60px rgba(60, 255, 160, 0.06); }
+  #screen { display: block; image-rendering: pixelated; }
+  /* bloom: a tiny copy of the frame, blurred and screen-blended on top */
+  #glow {
+    position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    filter: blur(5px) brightness(1.4) saturate(1.3); mix-blend-mode: screen; opacity: 0.45;
+  }
+  /* scanlines */
+  #scan {
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.3) 3px);
+  }
+  /* rolling refresh band + vignette */
+  #vig {
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.6) 100%);
+    box-shadow: inset 0 0 90px rgba(0,0,0,0.85);
+  }
+  #roll {
+    position: absolute; left: 0; right: 0; height: 18%; top: -20%; pointer-events: none;
+    background: linear-gradient(to bottom, rgba(120,255,190,0) 0%, rgba(120,255,190,0.035) 50%, rgba(120,255,190,0) 100%);
+    animation: roll 7s linear infinite;
+  }
+  @keyframes roll { from { top: -20%; } to { top: 110%; } }
+  #nojs { color: #7f7; font: 16px monospace; padding: 2em; }
+</style>
+</head>
+<body>
+<div id="term">
+  <div id="wrap">
+    <canvas id="screen"></canvas>
+    <canvas id="glow"></canvas>
+    <div id="scan"></div>
+    <div id="roll"></div>
+    <div id="vig"></div>
+  </div>
+</div>
+<noscript><div id="nojs">NEON//GRID needs JavaScript to boot.</div></noscript>
+<!--SCRIPTS-->
+</body>
+</html>
