@@ -910,6 +910,7 @@ AC.WorldGen = (function () {
   const ACCENTS = [1, 2, 3, 6, 1, 2, 4, 5, 9];
 
   function generate(seed) {
+    _taxiSign = -1;
     const W = new World(S);
     W.seed = seed;
     W.tile = { S, ST, R0, R1 };
@@ -940,6 +941,7 @@ AC.WorldGen = (function () {
     rooftops(W, blds, rng.fork(11));
     streetProps(W, rng.fork(13));
     alleyProps(W, rng.fork(17), plan);
+    taxiSign(W);            // moving taxis use it even if no taxi is parked
     buildNav(W, plan);
     buildLanes(W);
 
@@ -2962,7 +2964,10 @@ AC.Raycaster = (function () {
   let uArr = new Float32Array(0), vArr = new Float32Array(0);
   const stats = { rays: 0, steps: 0 };
 
-  function castFrame(cam, scr, r0, r1, maxT, shade) {
+  // Rows [r0, r1) are cast; `step`/`phase` select an interleaved subset of
+  // them (worker k of n renders rows r0+k, r0+k+n, ...) for load balancing.
+  function castFrame(cam, scr, r0, r1, maxT, shade, step, phase) {
+    step = step || 1; phase = phase || 0;
     const cols = scr.cols, rows = scr.rows;
     if (uArr.length !== cols) uArr = new Float32Array(cols);
     if (vArr.length !== rows) vArr = new Float32Array(rows);
@@ -2977,7 +2982,7 @@ AC.Raycaster = (function () {
     const ox = cam.x, oy = cam.y, oz = cam.z;
     let steps = 0, rays = 0;
     const gT = scr.gT, gKey = scr.gKey;
-    for (let r = r0; r < r1; r++) {
+    for (let r = r0 + phase; r < r1; r += step) {
       const v0 = vArr[r];
       let i = r * cols;
       for (let c = 0; c < cols; c++, i++) {
@@ -4712,7 +4717,7 @@ AC.HUD = (function () {
     // ---- bottom control strip
     Scr.fill(0, rows - 1, cols, 1, ' ', 0, 0, 0, fr * 0.16, fg * 0.16, fb * 0.16);
     const ctl = ' [WASD] MOVE  [MOUSE] LOOK  [SHIFT] SPRINT  [E] INTERACT  [ESC] RELEASE  ▌ [T] TIME  [R] RAIN  [P] PHOSPHOR  [M] MAP  [-/=] RES  [G] GLOW  [H] HELP';
-    const info = `${s.cols}x${s.rows} ${st.stats.rayMs.toFixed(1)}ms `;
+    const info = `${s.cols}x${s.rows} ${st.stats.threads > 1 ? st.stats.threads + 'T ' : ''}${st.stats.rayMs.toFixed(1)}ms `;
     Scr.text(0, rows - 1, ctl.slice(0, Math.max(0, cols - info.length - 1)), fr * 0.85, fg * 0.85, fb * 0.85, fr * 0.16, fg * 0.16, fb * 0.16);
     Scr.text(cols - info.length, rows - 1, info, fr * 0.5, fg * 0.5, fb * 0.5, fr * 0.16, fg * 0.16, fb * 0.16);
 
@@ -4952,6 +4957,185 @@ AC.Audio = (function () {
   return { start, setRain, step, blip, toggle, get on() { return on; } };
 })();
 
+// ---- parallel.js -----------------------------------------------------------
+// ============================================================================
+// parallel.js — multi-threaded ray casting with Web Workers
+// ----------------------------------------------------------------------------
+// The whole engine is plain deterministic JavaScript, so a worker can simply
+// run the same bundle and regenerate an identical city from the seed. Per
+// frame the main thread only ships what changes:
+//
+//   camera, env (time of day, fog, signals, ...), animated light intensities
+//   and colours, animated sign state, the dynamic primitives/objects emitted
+//   by the entity system (cars, walkers, doors) and the dynamic light buckets.
+//
+// Each of N workers ray casts and shades an interleaved set of rows
+// (row r goes to worker r mod N, which balances sky rows against street
+// rows) and posts back packed glyph/colour/depth/key/luminance rows. The main
+// thread keeps simulation, the edge pass, particles, persistence, HUD and the
+// blit. Frames are pipelined: the image presented in frame N was dispatched in
+// frame N-1, so the workers render while the main thread simulates.
+//
+// If workers are unavailable (e.g. running the unbundled dev page) the game
+// silently falls back to single-threaded rendering.
+// ============================================================================
+AC.Parallel = (function () {
+  'use strict';
+  const World = AC.World, PS = World.PS, OS = World.OS;
+
+  // ---------------------------------------------------------- worker side
+  function workerMain() {
+    let W = null, env = null;
+    const scr = { cols: 0, rows: 0, CW: 1, CH: 1, glyph: null, fr: null, fg: null, fb: null, gT: null, gKey: null, gLum: null };
+    self.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'init') {
+        W = AC.WorldGen.generate(m.seed);
+        AC.Raycaster.init(W);
+        env = AC.Environment.create();
+        AC.Shading.init(W, env, scr);
+        self.postMessage({ type: 'ready' });
+        return;
+      }
+      if (m.type !== 'job' || !W) return;
+      if (scr.cols !== m.cols || scr.rows !== m.rows) {
+        const n = m.cols * m.rows;
+        scr.cols = m.cols; scr.rows = m.rows;
+        scr.glyph = new Uint8Array(n); scr.fr = new Uint8ClampedArray(n); scr.fg = new Uint8ClampedArray(n); scr.fb = new Uint8ClampedArray(n);
+        scr.gT = new Float32Array(n); scr.gKey = new Int32Array(n); scr.gLum = new Float32Array(n);
+      }
+      scr.CW = m.CW; scr.CH = m.CH;
+      Object.assign(env, m.env);
+      // animated static state
+      W.lcur.set(m.lcur); W.lr.set(m.lr); W.lg.set(m.lg); W.lb.set(m.lb);
+      const sd = m.signs;
+      for (let k = 0; k < W.signs.length && k * 6 < sd.length; k++) {
+        const sg = W.signs[k], o = k * 6;
+        sg.cur = sd[o]; sg.scroll = sd[o + 1]; sg.colCur = sd[o + 2]; sg.chase = sd[o + 3]; sg.broken = sd[o + 4]; sg.brokenOn = sd[o + 5];
+      }
+      // dynamic geometry
+      W.resetDynamic();
+      W.prims.set(m.prims, W.nStaticPrims * PS); W.nPrims = W.nStaticPrims + m.prims.length / PS;
+      W.objs.set(m.objs, W.nStaticObjs * OS); W.nObjs = W.nStaticObjs + m.objs.length / OS;
+      for (let oi = W.nStaticObjs; oi < W.nObjs; oi++) W.registerDynamic(oi);
+      // dynamic lights
+      const D = AC.dynLights, dl = m.dl;
+      D.n = dl.n;
+      for (const k of ['x', 'y', 'z', 'dx', 'dy', 'dz', 'cos', 'r2', 'I', 'r', 'g', 'b', 'mono']) D[k].set(dl[k]);
+      D.bStart.set(dl.bStart);
+      D.bList = dl.bList;
+      // render the interleaved rows
+      AC.Shading.beginFrame(m.time, m.frame, m.cam, m.maxT);
+      AC.Raycaster.castFrame(m.cam, scr, m.r0, m.r1, m.maxT, AC.Shading.shade, m.step, m.phase);
+      const cols = scr.cols;
+      let nr = 0;
+      for (let r = m.r0 + m.phase; r < m.r1; r += m.step) nr++;
+      const n = nr * cols;
+      const out = {
+        glyph: new Uint8Array(n), fr: new Uint8ClampedArray(n), fg: new Uint8ClampedArray(n), fb: new Uint8ClampedArray(n),
+        gT: new Float32Array(n), gKey: new Int32Array(n), gLum: new Float32Array(n),
+      };
+      let w = 0;
+      for (let r = m.r0 + m.phase; r < m.r1; r += m.step, w += cols) {
+        const a = r * cols, b = a + cols;
+        out.glyph.set(scr.glyph.subarray(a, b), w); out.fr.set(scr.fr.subarray(a, b), w); out.fg.set(scr.fg.subarray(a, b), w); out.fb.set(scr.fb.subarray(a, b), w);
+        out.gT.set(scr.gT.subarray(a, b), w); out.gKey.set(scr.gKey.subarray(a, b), w); out.gLum.set(scr.gLum.subarray(a, b), w);
+      }
+      const st = AC.Raycaster.stats;
+      self.postMessage({ type: 'done', id: m.id, phase: m.phase, cols, out, rays: st.rays, steps: st.steps },
+        [out.glyph.buffer, out.fr.buffer, out.fg.buffer, out.fb.buffer, out.gT.buffer, out.gKey.buffer, out.gLum.buffer]);
+    };
+  }
+
+  // ------------------------------------------------------------ main side
+  const P = {
+    active: false, supported: false, workers: [], n: 0, ready: 0, busy: 0, jobId: 0, complete: false,
+    job: null, dispatchT: 0, latency: 0, rays: 0, steps: 0, failed: false,
+  };
+
+  function init(seed, src, count) {
+    if (typeof Worker === 'undefined' || !src || src.indexOf('AC.WorldGen') < 0) return false;
+    try {
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      for (let k = 0; k < count; k++) {
+        const w = new Worker(url);
+        w.onmessage = (e) => onMessage(e.data);
+        w.onerror = (e) => { P.failed = true; P.active = false; console.error('render worker failed, falling back to single thread:', e && e.message); if (e && e.preventDefault) e.preventDefault(); };
+        w.postMessage({ type: 'init', seed });
+        P.workers.push(w);
+      }
+      P.n = count; P.supported = true;
+      return true;
+    } catch (err) {
+      P.failed = true;
+      return false;
+    }
+  }
+
+  let target = null; // screen buffers the results are unpacked into
+  function onMessage(m) {
+    if (m.type === 'ready') { if (++P.ready === P.n && !P.failed) P.active = true; return; }
+    if (m.type !== 'done' || !P.job || m.id !== P.job.id) return;
+    const scr = target;
+    if (scr && m.cols === scr.cols && P.job.cols === scr.cols && P.job.rows === scr.rows) {
+      const cols = scr.cols, o = m.out;
+      let w = 0;
+      for (let r = P.job.r0 + m.phase; r < P.job.r1; r += P.n, w += cols) {
+        const a = r * cols;
+        scr.glyph.set(o.glyph.subarray(w, w + cols), a); scr.fr.set(o.fr.subarray(w, w + cols), a); scr.fg.set(o.fg.subarray(w, w + cols), a); scr.fb.set(o.fb.subarray(w, w + cols), a);
+        scr.gT.set(o.gT.subarray(w, w + cols), a); scr.gKey.set(o.gKey.subarray(w, w + cols), a); scr.gLum.set(o.gLum.subarray(w, w + cols), a);
+      }
+    } else P.job.stale = true;
+    P.rays += m.rays; P.steps += m.steps;
+    if (--P.busy === 0) {
+      P.complete = !P.job.stale;
+      P.latency += (performance.now() - P.dispatchT - P.latency) * 0.1;
+      if (P.job.stale) P.job = null;
+    }
+  }
+
+  function packSigns(W) {
+    const n = W.signs.length, a = new Float32Array(n * 6);
+    for (let k = 0; k < n; k++) {
+      const s = W.signs[k], o = k * 6;
+      a[o] = s.cur; a[o + 1] = s.scroll; a[o + 2] = s.colCur; a[o + 3] = s.chase; a[o + 4] = s.broken; a[o + 5] = s.brokenOn;
+    }
+    return a;
+  }
+
+  // Send the current frame to every worker. `W` must already contain this
+  // frame's dynamic entities (ents.emit has run).
+  function dispatch(W, env, cam, scr, time, frame, maxT) {
+    target = scr;
+    const id = ++P.jobId;
+    const D = AC.dynLights, n = D.n;
+    const dl = { n, bStart: D.bStart.slice(), bList: D.bList.slice(0, D.bStart[D.B * D.B]) };
+    for (const k of ['x', 'y', 'z', 'dx', 'dy', 'dz', 'cos', 'r2', 'I', 'r', 'g', 'b', 'mono']) dl[k] = D[k].slice();
+    const base = {
+      type: 'job', id, r0: 1, r1: scr.rows - 1, step: P.n, cols: scr.cols, rows: scr.rows, CW: scr.CW, CH: scr.CH,
+      cam, env, time, frame, maxT,
+      prims: W.prims.slice(W.nStaticPrims * PS, W.nPrims * PS), objs: W.objs.slice(W.nStaticObjs * OS, W.nObjs * OS),
+      lcur: W.lcur, lr: W.lr, lg: W.lg, lb: W.lb, signs: packSigns(W), dl,
+    };
+    P.job = { id, cam, r0: base.r0, r1: base.r1, cols: scr.cols, rows: scr.rows, time, frame };
+    P.busy = P.n; P.complete = false; P.rays = 0; P.steps = 0;
+    P.dispatchT = performance.now();
+    for (let k = 0; k < P.n; k++) { base.phase = k; P.workers[k].postMessage(base); }
+  }
+
+  // Take the finished frame (returns its job record) or null.
+  function take() {
+    if (!P.complete) return null;
+    P.complete = false;
+    const j = P.job; P.job = null;
+    return j;
+  }
+
+  if (typeof document === 'undefined' && typeof self !== 'undefined' && typeof WorkerGlobalScope !== 'undefined') workerMain();
+
+  return { init, dispatch, take, state: P, get active() { return P.active; }, get busy() { return P.busy > 0; } };
+})();
+
 // ---- main.js ---------------------------------------------------------------
 // ============================================================================
 // main.js — boot, game loop, input actions, adaptive resolution
@@ -4968,10 +5152,12 @@ AC.Main = (function () {
   const SEED = 2089;
   const FIXED = 1 / 120;
 
-  let W, env, ents, player, canvas, glowEl, wrapEl;
+  // capture this bundle's own source so render workers can run the same code
+  const SRC = typeof document !== 'undefined' && document.currentScript ? document.currentScript.textContent : '';
+  let W, env, ents, player, canvas, glowEl, wrapEl, presented = 0;
   let last = 0, acc = 0, simTime = 0, frameNo = 0, time = 0, bootT = 0;
-  const stats = { fps: 60, rayMs: 0, postMs: 0, blitMs: 0, workMs: 0, rays: 0, steps: 0, drawn: 0 };
-  const opts = { mapOn: true, helpOn: false, charH: 18, minCharH: 14, autoRes: true, maxT: 105, forceLocked: false };
+  const stats = { fps: 60, rayMs: 0, postMs: 0, blitMs: 0, workMs: 0, rays: 0, steps: 0, drawn: 0, threads: 1 };
+  const opts = { mapOn: true, helpOn: false, charH: 18, minCharH: 14, autoRes: true, maxT: 105, forceLocked: false, singleThread: false };
   let resTimer = 0, workAcc = 0, workN = 0, rainLevel = 1, actRng = new RNG(99);
   let glitch = { t: 0, row: 0, n: 0, k: 0 };
   const RAIN_LEVELS = [0, 0.45, 1];
@@ -4996,6 +5182,11 @@ AC.Main = (function () {
     resize();
     window.addEventListener('resize', resize);
     AC.Shading.init(W, env, AC.Screen.scr);
+    // render workers (falls back to single-threaded if unavailable)
+    if (!/[?&]st\b/.test(location.search)) {
+      const hc = navigator.hardwareConcurrency || 4;
+      AC.Parallel.init(SEED, SRC, Math.max(1, Math.min(6, hc - 1)));
+    }
     AC.HUD.message('WELCOME TO KABUKI-7. THE NOODLE BAR ACROSS THE STREET IS OPEN.', 7);
     exposeDebug();
     last = performance.now();
@@ -5125,6 +5316,7 @@ AC.Main = (function () {
     frame(dt);
   }
 
+  let lastPresent = 0;
   function frame(dt) {
     time += dt; bootT += dt;
     applyPendingResize();
@@ -5145,31 +5337,48 @@ AC.Main = (function () {
     AC.Particles.update(dt, cam, env, simTime);
 
     const scr = AC.Screen.scr;
-    AC.Shading.beginFrame(simTime, frameNo, cam, opts.maxT);
+    let rcam = null;
     const t1 = performance.now();
-    AC.Raycaster.castFrame(cam, scr, 1, scr.rows - 1, opts.maxT, AC.Shading.shade);
+    if (AC.Parallel.active && !opts.singleThread) {
+      // pipelined: present what the workers finished, then hand them this frame
+      const job = AC.Parallel.take();
+      if (job) { rcam = job.cam; stats.rays = AC.Parallel.state.rays; stats.steps = AC.Parallel.state.steps; }
+      if (!AC.Parallel.busy) AC.Parallel.dispatch(W, env, cam, scr, simTime, frameNo, opts.maxT);
+      stats.threads = AC.Parallel.state.n;
+      stats.rayMs = AC.Parallel.state.latency;
+    } else {
+      AC.Shading.beginFrame(simTime, frameNo, cam, opts.maxT);
+      AC.Raycaster.castFrame(cam, scr, 1, scr.rows - 1, opts.maxT, AC.Shading.shade);
+      rcam = cam;
+      stats.threads = 1;
+      stats.rayMs += (performance.now() - t1 - stats.rayMs) * 0.08;
+      stats.rays = AC.Raycaster.stats.rays; stats.steps = AC.Raycaster.stats.steps;
+    }
     const t2 = performance.now();
-    if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 34, 0.2);
-    AC.Particles.render(scr, cam, env, frameNo);
-    AC.Screen.compose(dt);
-    glitchPass(dt);
-    const it = findInteractable();
-    AC.HUD.draw({
-      W, env, player, ents, fps: stats.fps, stats, prompt: promptFor(it), locked: AC.Input.locked || opts.forceLocked,
-      mapOn: opts.mapOn, helpOn: opts.helpOn, boot: bootT, time,
-    }, dt);
-    const t3 = performance.now();
-    stats.drawn = AC.Screen.present();
-    const t4 = performance.now();
-
-    const k = 0.08;
-    stats.rayMs += (t2 - t1 - stats.rayMs) * k;
-    stats.postMs += (t3 - t2 - stats.postMs) * k;
-    stats.blitMs += (t4 - t3 - stats.blitMs) * k;
-    stats.workMs += (t4 - t0 - stats.workMs) * k;
-    stats.fps += (1 / dt - stats.fps) * 0.05;
-    stats.rays = AC.Raycaster.stats.rays; stats.steps = AC.Raycaster.stats.steps;
-    adaptResolution(dt, t4 - t0);
+    if (rcam) {
+      const pdt = lastPresent ? Math.min(0.1, (t2 - lastPresent) / 1000) : dt;
+      lastPresent = t2;
+      if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 34, 0.2);
+      AC.Particles.render(scr, rcam, env, frameNo);
+      AC.Screen.compose(pdt);
+      glitchPass(pdt);
+      const it = findInteractable();
+      AC.HUD.draw({
+        W, env, player, ents, fps: stats.fps, stats, prompt: promptFor(it), locked: AC.Input.locked || opts.forceLocked,
+        mapOn: opts.mapOn, helpOn: opts.helpOn, boot: bootT, time,
+      }, pdt);
+      const t3 = performance.now();
+      stats.drawn = AC.Screen.present();
+      const t4 = performance.now();
+      const k = 0.08;
+      stats.postMs += (t3 - t2 - stats.postMs) * k;
+      stats.blitMs += (t4 - t3 - stats.blitMs) * k;
+      stats.fps += (1 / pdt - stats.fps) * 0.08;
+      presented++;
+    }
+    const tEnd = performance.now();
+    stats.workMs += (tEnd - t0 - stats.workMs) * 0.08;
+    adaptResolution(dt, stats.threads > 1 ? Math.max(tEnd - t0, stats.rayMs) : tEnd - t0);
     frameNo++;
   }
 
@@ -5217,8 +5426,10 @@ AC.Main = (function () {
     };
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  if (typeof document !== 'undefined') {           // (workers load this bundle too)
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }
   return { stats, opts };
 })();
 

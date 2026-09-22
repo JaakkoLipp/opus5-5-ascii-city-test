@@ -309,7 +309,10 @@ AC.Raycaster = (function () {
   let uArr = new Float32Array(0), vArr = new Float32Array(0);
   const stats = { rays: 0, steps: 0 };
 
-  function castFrame(cam, scr, r0, r1, maxT, shade) {
+  // Rows [r0, r1) are cast; `step`/`phase` select an interleaved subset of
+  // them (worker k of n renders rows r0+k, r0+k+n, ...) for load balancing.
+  function castFrame(cam, scr, r0, r1, maxT, shade, step, phase) {
+    step = step || 1; phase = phase || 0;
     const cols = scr.cols, rows = scr.rows;
     if (uArr.length !== cols) uArr = new Float32Array(cols);
     if (vArr.length !== rows) vArr = new Float32Array(rows);
@@ -324,7 +327,7 @@ AC.Raycaster = (function () {
     const ox = cam.x, oy = cam.y, oz = cam.z;
     let steps = 0, rays = 0;
     const gT = scr.gT, gKey = scr.gKey;
-    for (let r = r0; r < r1; r++) {
+    for (let r = r0 + phase; r < r1; r += step) {
       const v0 = vArr[r];
       let i = r * cols;
       for (let c = 0; c < cols; c++, i++) {

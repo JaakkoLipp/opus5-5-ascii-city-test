@@ -64,7 +64,7 @@ AC.HUD = (function () {
     // ---- bottom control strip
     Scr.fill(0, rows - 1, cols, 1, ' ', 0, 0, 0, fr * 0.16, fg * 0.16, fb * 0.16);
     const ctl = ' [WASD] MOVE  [MOUSE] LOOK  [SHIFT] SPRINT  [E] INTERACT  [ESC] RELEASE  ▌ [T] TIME  [R] RAIN  [P] PHOSPHOR  [M] MAP  [-/=] RES  [G] GLOW  [H] HELP';
-    const info = `${s.cols}x${s.rows} ${st.stats.rayMs.toFixed(1)}ms `;
+    const info = `${s.cols}x${s.rows} ${st.stats.threads > 1 ? st.stats.threads + 'T ' : ''}${st.stats.rayMs.toFixed(1)}ms `;
     Scr.text(0, rows - 1, ctl.slice(0, Math.max(0, cols - info.length - 1)), fr * 0.85, fg * 0.85, fb * 0.85, fr * 0.16, fg * 0.16, fb * 0.16);
     Scr.text(cols - info.length, rows - 1, info, fr * 0.5, fg * 0.5, fb * 0.5, fr * 0.16, fg * 0.16, fb * 0.16);
 

@@ -11,7 +11,7 @@ const MODULES = [
   'util.js', 'font.js', 'world-data.js', 'models.js', 'worldgen.js',
   'environment.js', 'entities.js', 'ai.js', 'physics.js', 'player.js',
   'raycaster.js', 'shading.js', 'ascii-renderer.js', 'particles.js',
-  'hud.js', 'input.js', 'audio.js', 'main.js',
+  'hud.js', 'input.js', 'audio.js', 'parallel.js', 'main.js',
 ];
 
 const src = path.join(__dirname, 'src');

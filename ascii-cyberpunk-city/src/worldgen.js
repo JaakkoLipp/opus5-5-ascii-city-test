@@ -38,6 +38,7 @@ AC.WorldGen = (function () {
   const ACCENTS = [1, 2, 3, 6, 1, 2, 4, 5, 9];
 
   function generate(seed) {
+    _taxiSign = -1;
     const W = new World(S);
     W.seed = seed;
     W.tile = { S, ST, R0, R1 };
@@ -68,6 +69,7 @@ AC.WorldGen = (function () {
     rooftops(W, blds, rng.fork(11));
     streetProps(W, rng.fork(13));
     alleyProps(W, rng.fork(17), plan);
+    taxiSign(W);            // moving taxis use it even if no taxi is parked
     buildNav(W, plan);
     buildLanes(W);
 

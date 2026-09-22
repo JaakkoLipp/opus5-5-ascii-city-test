@@ -13,10 +13,12 @@ AC.Main = (function () {
   const SEED = 2089;
   const FIXED = 1 / 120;
 
-  let W, env, ents, player, canvas, glowEl, wrapEl;
+  // capture this bundle's own source so render workers can run the same code
+  const SRC = typeof document !== 'undefined' && document.currentScript ? document.currentScript.textContent : '';
+  let W, env, ents, player, canvas, glowEl, wrapEl, presented = 0;
   let last = 0, acc = 0, simTime = 0, frameNo = 0, time = 0, bootT = 0;
-  const stats = { fps: 60, rayMs: 0, postMs: 0, blitMs: 0, workMs: 0, rays: 0, steps: 0, drawn: 0 };
-  const opts = { mapOn: true, helpOn: false, charH: 18, minCharH: 14, autoRes: true, maxT: 105, forceLocked: false };
+  const stats = { fps: 60, rayMs: 0, postMs: 0, blitMs: 0, workMs: 0, rays: 0, steps: 0, drawn: 0, threads: 1 };
+  const opts = { mapOn: true, helpOn: false, charH: 18, minCharH: 14, autoRes: true, maxT: 105, forceLocked: false, singleThread: false };
   let resTimer = 0, workAcc = 0, workN = 0, rainLevel = 1, actRng = new RNG(99);
   let glitch = { t: 0, row: 0, n: 0, k: 0 };
   const RAIN_LEVELS = [0, 0.45, 1];
@@ -41,6 +43,11 @@ AC.Main = (function () {
     resize();
     window.addEventListener('resize', resize);
     AC.Shading.init(W, env, AC.Screen.scr);
+    // render workers (falls back to single-threaded if unavailable)
+    if (!/[?&]st\b/.test(location.search)) {
+      const hc = navigator.hardwareConcurrency || 4;
+      AC.Parallel.init(SEED, SRC, Math.max(1, Math.min(6, hc - 1)));
+    }
     AC.HUD.message('WELCOME TO KABUKI-7. THE NOODLE BAR ACROSS THE STREET IS OPEN.', 7);
     exposeDebug();
     last = performance.now();
@@ -170,6 +177,7 @@ AC.Main = (function () {
     frame(dt);
   }
 
+  let lastPresent = 0;
   function frame(dt) {
     time += dt; bootT += dt;
     applyPendingResize();
@@ -190,31 +198,48 @@ AC.Main = (function () {
     AC.Particles.update(dt, cam, env, simTime);
 
     const scr = AC.Screen.scr;
-    AC.Shading.beginFrame(simTime, frameNo, cam, opts.maxT);
+    let rcam = null;
     const t1 = performance.now();
-    AC.Raycaster.castFrame(cam, scr, 1, scr.rows - 1, opts.maxT, AC.Shading.shade);
+    if (AC.Parallel.active && !opts.singleThread) {
+      // pipelined: present what the workers finished, then hand them this frame
+      const job = AC.Parallel.take();
+      if (job) { rcam = job.cam; stats.rays = AC.Parallel.state.rays; stats.steps = AC.Parallel.state.steps; }
+      if (!AC.Parallel.busy) AC.Parallel.dispatch(W, env, cam, scr, simTime, frameNo, opts.maxT);
+      stats.threads = AC.Parallel.state.n;
+      stats.rayMs = AC.Parallel.state.latency;
+    } else {
+      AC.Shading.beginFrame(simTime, frameNo, cam, opts.maxT);
+      AC.Raycaster.castFrame(cam, scr, 1, scr.rows - 1, opts.maxT, AC.Shading.shade);
+      rcam = cam;
+      stats.threads = 1;
+      stats.rayMs += (performance.now() - t1 - stats.rayMs) * 0.08;
+      stats.rays = AC.Raycaster.stats.rays; stats.steps = AC.Raycaster.stats.steps;
+    }
     const t2 = performance.now();
-    if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 34, 0.2);
-    AC.Particles.render(scr, cam, env, frameNo);
-    AC.Screen.compose(dt);
-    glitchPass(dt);
-    const it = findInteractable();
-    AC.HUD.draw({
-      W, env, player, ents, fps: stats.fps, stats, prompt: promptFor(it), locked: AC.Input.locked || opts.forceLocked,
-      mapOn: opts.mapOn, helpOn: opts.helpOn, boot: bootT, time,
-    }, dt);
-    const t3 = performance.now();
-    stats.drawn = AC.Screen.present();
-    const t4 = performance.now();
-
-    const k = 0.08;
-    stats.rayMs += (t2 - t1 - stats.rayMs) * k;
-    stats.postMs += (t3 - t2 - stats.postMs) * k;
-    stats.blitMs += (t4 - t3 - stats.blitMs) * k;
-    stats.workMs += (t4 - t0 - stats.workMs) * k;
-    stats.fps += (1 / dt - stats.fps) * 0.05;
-    stats.rays = AC.Raycaster.stats.rays; stats.steps = AC.Raycaster.stats.steps;
-    adaptResolution(dt, t4 - t0);
+    if (rcam) {
+      const pdt = lastPresent ? Math.min(0.1, (t2 - lastPresent) / 1000) : dt;
+      lastPresent = t2;
+      if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 34, 0.2);
+      AC.Particles.render(scr, rcam, env, frameNo);
+      AC.Screen.compose(pdt);
+      glitchPass(pdt);
+      const it = findInteractable();
+      AC.HUD.draw({
+        W, env, player, ents, fps: stats.fps, stats, prompt: promptFor(it), locked: AC.Input.locked || opts.forceLocked,
+        mapOn: opts.mapOn, helpOn: opts.helpOn, boot: bootT, time,
+      }, pdt);
+      const t3 = performance.now();
+      stats.drawn = AC.Screen.present();
+      const t4 = performance.now();
+      const k = 0.08;
+      stats.postMs += (t3 - t2 - stats.postMs) * k;
+      stats.blitMs += (t4 - t3 - stats.blitMs) * k;
+      stats.fps += (1 / pdt - stats.fps) * 0.08;
+      presented++;
+    }
+    const tEnd = performance.now();
+    stats.workMs += (tEnd - t0 - stats.workMs) * 0.08;
+    adaptResolution(dt, stats.threads > 1 ? Math.max(tEnd - t0, stats.rayMs) : tEnd - t0);
     frameNo++;
   }
 
@@ -262,7 +287,9 @@ AC.Main = (function () {
     };
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  if (typeof document !== 'undefined') {           // (workers load this bundle too)
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }
   return { stats, opts };
 })();
