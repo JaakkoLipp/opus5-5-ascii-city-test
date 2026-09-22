@@ -184,11 +184,13 @@ AC.World = (function () {
     }
 
     // --------------------------------------------------------------- lights
-    addLight(x, y, z, r, g, b, radius, intensity, anim, param, mono) {
+    // `down` > 0 turns the light into a downward cone (street lamps): the
+    // value is the cosine of the cone half-angle measured from straight down.
+    addLight(x, y, z, r, g, b, radius, intensity, anim, param, mono, down) {
       const S = this.S;
       this.lights.push({
         x: ((x % S) + S) % S, y: ((y % S) + S) % S, z, r, g, b, radius,
-        intensity, anim: anim || 0, param: param || 0, mono: mono ? 1 : 0,
+        intensity, anim: anim || 0, param: param || 0, mono: mono ? 1 : 0, down: down || 0,
       });
       return this.lights.length - 1;
     }
@@ -270,7 +272,7 @@ AC.World = (function () {
       this.lx = new Float32Array(n); this.ly = new Float32Array(n); this.lz = new Float32Array(n);
       this.lr = new Float32Array(n); this.lg = new Float32Array(n); this.lb = new Float32Array(n);
       this.lrad2 = new Float32Array(n); this.lbase = new Float32Array(n); this.lcur = new Float32Array(n);
-      this.lanim = new Uint8Array(n); this.lparam = new Float32Array(n); this.lmono = new Uint8Array(n);
+      this.lanim = new Uint8Array(n); this.lparam = new Float32Array(n); this.lmono = new Uint8Array(n); this.ldown = new Float32Array(n);
       const perCell = [];
       for (let i = 0; i < N; i++) perCell.push(null);
       let total = 0;
@@ -279,7 +281,7 @@ AC.World = (function () {
         this.lx[k] = l.x; this.ly[k] = l.y; this.lz[k] = l.z;
         this.lr[k] = l.r; this.lg[k] = l.g; this.lb[k] = l.b;
         this.lrad2[k] = l.radius * l.radius; this.lbase[k] = l.intensity; this.lcur[k] = l.intensity;
-        this.lanim[k] = l.anim; this.lparam[k] = l.param; this.lmono[k] = l.mono;
+        this.lanim[k] = l.anim; this.lparam[k] = l.param; this.lmono[k] = l.mono; this.ldown[k] = l.down;
         const R = Math.ceil(l.radius);
         const cx = Math.floor(l.x), cy = Math.floor(l.y);
         for (let oy = -R; oy <= R; oy++) for (let ox = -R; ox <= R; ox++) {

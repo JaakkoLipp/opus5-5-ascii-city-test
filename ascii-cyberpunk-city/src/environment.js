@@ -74,10 +74,10 @@ AC.Environment = (function () {
     env.sunI = 0.95 * day;
     env.skyZenith = 0.012 + 0.28 * day + 0.03 * dusk;
     env.skyHorizon = 0.05 + 0.5 * day + 0.12 * dusk;
-    env.cityGlow = 0.1 * night + 0.14 * dusk;
+    env.cityGlow = 0.065 * night + 0.14 * dusk;
     env.cloudLight = 0.05 + 0.35 * day + 0.1 * dusk;
     // fog is the colour of the horizon: violet city glow at night, grey haze by day
-    env.fogM = 0.035 + 0.3 * day + 0.04 * dusk;
+    env.fogM = 0.022 + 0.3 * day + 0.04 * dusk;
     const glow = env.cityGlow;
     env.fogR = glow * 0.75; env.fogG = glow * 0.12; env.fogB = glow * 0.62;
     env.fogStart = 8;

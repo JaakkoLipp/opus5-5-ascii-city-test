@@ -7,9 +7,35 @@
 // (headlights, strobes, LED umbrellas) for the shader.
 // ============================================================================
 AC.dynLights = (function () {
-  const N = 64;
+  const N = 64, B = 10;            // up to 64 lights, 10x10 buckets of 8 m over the 80 m tile
   const f = () => new Float32Array(N);
-  return { n: 0, max: N, x: f(), y: f(), z: f(), dx: f(), dy: f(), dz: f(), cos: f(), r2: f(), I: f(), r: f(), g: f(), b: f(), mono: new Uint8Array(N) };
+  const D = { n: 0, max: N, x: f(), y: f(), z: f(), dx: f(), dy: f(), dz: f(), cos: f(), r2: f(), I: f(), r: f(), g: f(), b: f(), mono: new Uint8Array(N),
+    B, bSize: 8, bStart: new Int32Array(B * B + 1), bList: new Int16Array(N * 9), bCount: new Int32Array(B * B) };
+  // Bucket every light into the 8 m cells its radius touches so the shader
+  // only tests lights near the shaded point.
+  D.build = function () {
+    const cnt = D.bCount; cnt.fill(0);
+    const spans = [];
+    for (let k = 0; k < D.n; k++) {
+      const r = Math.sqrt(D.r2[k]);
+      const x0 = Math.floor((D.x[k] - r) / 8), x1 = Math.floor((D.x[k] + r) / 8);
+      const y0 = Math.floor((D.y[k] - r) / 8), y1 = Math.floor((D.y[k] + r) / 8);
+      spans.push(x0, x1, y0, y1);
+      for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) cnt[(((by % B) + B) % B) * B + (((bx % B) + B) % B)]++;
+    }
+    let w = 0;
+    for (let i = 0; i < B * B; i++) { D.bStart[i] = w; w += cnt[i]; cnt[i] = 0; }
+    D.bStart[B * B] = w;
+    if (D.bList.length < w) D.bList = new Int16Array(w * 2);
+    for (let k = 0; k < D.n; k++) {
+      const [x0, x1, y0, y1] = spans.slice(k * 4, k * 4 + 4);
+      for (let by = y0; by <= y1; by++) for (let bx = x0; bx <= x1; bx++) {
+        const b = (((by % B) + B) % B) * B + (((bx % B) + B) % B);
+        D.bList[D.bStart[b] + cnt[b]++] = k;
+      }
+    }
+  };
+  return D;
 })();
 
 AC.Entities = (function () {
@@ -142,7 +168,7 @@ AC.Entities = (function () {
           const hx = Math.cos(c.yaw), hy = Math.sin(c.yaw);
           const n = Math.hypot(hx, hy, 0.16);
           addDynLight(c.x + hx * (c.len + 0.35), c.y + hy * (c.len + 0.35), 0.75, hx / n, hy / n, -0.16 / n, 0.78, 24, 1.5 * env.headlightGain, 1, 1, 1, true);
-          addDynLight(c.x - hx * (c.len + 0.4), c.y - hy * (c.len + 0.4), 0.8, 0, 0, 0, -2, 3.2, 0.35 + c.brake * 0.9, 1, 0.12, 0.1, false);
+          if (c.brake > 0.5 && near(c.x, c.y, 25)) addDynLight(c.x - hx * (c.len + 0.4), c.y - hy * (c.len + 0.4), 0.8, 0, 0, 0, -2, 3.2, 0.9, 1, 0.12, 0.1, false);
           if (c.type === 'police') {
             const on = Math.floor(t * 7) & 1;
             addDynLight(c.x, c.y, 2.0, 0, 0, 0, -2, 10, 1.3, on ? 1 : 0.2, 0.12, on ? 0.12 : 1, false);
@@ -186,6 +212,7 @@ AC.Entities = (function () {
         W.registerDynamic(W.nObjs - 1);
         if (!L.sit) this.colliders.push({ t: 'c', x: n.x, y: n.y, r: 0.28, z1: 1.8 });
       }
+      DLT.build();
       for (const d of W.doors) {
         Models.door(W, d);
         W.registerDynamic(W.nObjs - 1);

@@ -56,8 +56,9 @@ AC.Raycaster = (function () {
   }
 
   // ------------------------------------------------ primitive intersection
-  // scratch outputs of hitPrim
-  let pnx = 0, pny = 0, pnz = 0, pu = 0, pv = 0, pw = 0, pf = 0;
+  // scratch outputs of hitPrim, kept in a typed array so writing doubles does
+  // not allocate (closure variables holding doubles get boxed on every write)
+  const PH = new Float64Array(8); // nx, ny, nz, u, v, w, face, t
 
   function hitPrim(o, rox, roy, oz, dx, dy, dz, tmin, tmax) {
     const pr = prims;
@@ -74,27 +75,27 @@ AC.Raycaster = (function () {
         if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; g = 1; }
         if (t1 > tn) { tn = t1; ax = 0; sg = g; }
         if (t2 < tf) tf = t2;
-      } else if (px < -hx || px > hx) return -1;
+      } else if (px < -hx || px > hx) return 0;
       if (ldy > 1e-9 || ldy < -1e-9) {
         const inv = 1 / ldy;
         let t1 = (-hy - py) * inv, t2 = (hy - py) * inv, g = -1;
         if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; g = 1; }
         if (t1 > tn) { tn = t1; ax = 1; sg = g; }
         if (t2 < tf) tf = t2;
-      } else if (py < -hy || py > hy) return -1;
+      } else if (py < -hy || py > hy) return 0;
       if (dz > 1e-9 || dz < -1e-9) {
         const inv = 1 / dz;
         let t1 = (z0 - oz) * inv, t2 = (z1 - oz) * inv, g = -1;
         if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; g = 1; }
         if (t1 > tn) { tn = t1; ax = 2; sg = g; }
         if (t2 < tf) tf = t2;
-      } else if (oz < z0 || oz > z1) return -1;
-      if (tn > tf || tn < tmin || tn > tmax) return -1;
-      if (ax === 0) { pnx = sg * c; pny = sg * s; pnz = 0; pf = sg < 0 ? 0 : 1; }
-      else if (ax === 1) { pnx = -sg * s; pny = sg * c; pnz = 0; pf = sg < 0 ? 2 : 3; }
-      else { pnx = 0; pny = 0; pnz = sg; pf = sg < 0 ? 4 : 5; }
-      pu = px + ldx * tn + hx; pv = py + ldy * tn + hy; pw = oz + dz * tn - z0;
-      return tn;
+      } else if (oz < z0 || oz > z1) return 0;
+      if (tn > tf || tn < tmin || tn > tmax) return 0;
+      if (ax === 0) { PH[0] = sg * c; PH[1] = sg * s; PH[2] = 0; PH[6] = sg < 0 ? 0 : 1; }
+      else if (ax === 1) { PH[0] = -sg * s; PH[1] = sg * c; PH[2] = 0; PH[6] = sg < 0 ? 2 : 3; }
+      else { PH[0] = 0; PH[1] = 0; PH[2] = sg; PH[6] = sg < 0 ? 4 : 5; }
+      PH[3] = px + ldx * tn + hx; PH[4] = py + ldy * tn + hy; PH[5] = oz + dz * tn - z0;
+      PH[7] = tn; return 1;
     } else if (type === 2) { // --------- vertical cylinder
       const r = pr[o + 5], z0 = pr[o + 3], z1 = pr[o + 4];
       const a = dx * dx + dy * dy;
@@ -102,28 +103,28 @@ AC.Raycaster = (function () {
       if (a > 1e-12) {
         const b = rx * dx + ry * dy;
         const disc = b * b - a * cc;
-        if (disc < 0) return -1;
+        if (disc < 0) return 0;
         const t = (-b - Math.sqrt(disc)) / a;
         if (t >= tmin) {
           const z = oz + dz * t;
           if (z >= z0 && z <= z1) {
-            if (t > tmax) return -1;
+            if (t > tmax) return 0;
             const inv = 1 / r;
-            pnx = (rx + dx * t) * inv; pny = (ry + dy * t) * inv; pnz = 0;
-            pu = pnx; pv = pny; pw = z - z0; pf = 6;
-            return t;
+            PH[0] = (rx + dx * t) * inv; PH[1] = (ry + dy * t) * inv; PH[2] = 0;
+            PH[3] = PH[0]; PH[4] = PH[1]; PH[5] = z - z0; PH[6] = 6;
+            PH[7] = t; return 1;
           }
-        } else if (cc < 0 && (oz >= z0 && oz <= z1)) return -1; // inside
-      } else if (cc > 0) return -1;
+        } else if (cc < 0 && (oz >= z0 && oz <= z1)) return 0; // inside
+      } else if (cc > 0) return 0;
       // caps
       let t = -1, top = 0;
       if (dz < 0 && oz > z1) { t = (z1 - oz) / dz; top = 1; }
       else if (dz > 0 && oz < z0) { t = (z0 - oz) / dz; }
-      if (t < tmin || t > tmax) return -1;
+      if (t < tmin || t > tmax) return 0;
       const hx = rx + dx * t, hy = ry + dy * t;
-      if (hx * hx + hy * hy > r * r) return -1;
-      pnx = 0; pny = 0; pnz = top ? 1 : -1; pu = hx; pv = hy; pw = top ? z1 - z0 : 0; pf = top ? 5 : 4;
-      return t;
+      if (hx * hx + hy * hy > r * r) return 0;
+      PH[0] = 0; PH[1] = 0; PH[2] = top ? 1 : -1; PH[3] = hx; PH[4] = hy; PH[5] = top ? z1 - z0 : 0; PH[6] = top ? 5 : 4;
+      PH[7] = t; return 1;
     } else { // -------------------------- ellipsoid
       const r = pr[o + 5], cz = pr[o + 3], rz = pr[o + 4];
       const k = r / rz;
@@ -132,15 +133,15 @@ AC.Raycaster = (function () {
       const b = rx * dx + ry * dy + rzv * dzs;
       const c = rx * rx + ry * ry + rzv * rzv - r * r;
       const disc = b * b - a * c;
-      if (disc < 0 || c < 0) return -1;
+      if (disc < 0 || c < 0) return 0;
       const t = (-b - Math.sqrt(disc)) / a;
-      if (t < tmin || t > tmax) return -1;
+      if (t < tmin || t > tmax) return 0;
       const ex = rx + dx * t, ey = ry + dy * t, ez = oz + dz * t - cz;
       let gx = ex, gy = ey, gz = ez * k * k;
       const inv = 1 / Math.sqrt(gx * gx + gy * gy + gz * gz + 1e-12);
-      pnx = gx * inv; pny = gy * inv; pnz = gz * inv;
-      pu = ex; pv = ey; pw = ez; pf = 7;
-      return t;
+      PH[0] = gx * inv; PH[1] = gy * inv; PH[2] = gz * inv;
+      PH[3] = ex; PH[4] = ey; PH[5] = ez; PH[6] = 7;
+      PH[7] = t; return 1;
     }
   }
 
@@ -234,10 +235,9 @@ AC.Raycaster = (function () {
           const p0 = objs[q + 6], pn = objs[q + 7];
           for (let p = p0; p < p0 + pn; p++) {
             const o = p * PS;
-            const t = hitPrim(o, rox, roy, oz, dx, dy, dz, 0.02, best);
-            if (t >= 0) {
-              best = t; hk = K_PRIM; hprim = p; hci = ci;
-              hnx = pnx; hny = pny; hnz = pnz; hu = pu; hv = pv; hw = pw; hf = pf;
+            if (hitPrim(o, rox, roy, oz, dx, dy, dz, 0.02, best)) {
+              best = PH[7]; hk = K_PRIM; hprim = p; hci = ci;
+              hnx = PH[0]; hny = PH[1]; hnz = PH[2]; hu = PH[3]; hv = PH[4]; hw = PH[5]; hf = PH[6];
               hux = rox === ox ? 0 : ox - rox; huy = roy === oy ? 0 : oy - roy; // origin shift
             }
           }
@@ -298,7 +298,7 @@ AC.Raycaster = (function () {
         break;
       default: {
         H.nx = hnx; H.ny = hny; H.nz = hnz; H.u = hu; H.v = hv; H.w = hw; H.face = hf; H.prim = hprim;
-        H.mat = prims[hprim * PS + 9];
+        H.mat = prims[hprim * PS + 9] | 0;
         H.key = -(hprim * 8 + hf + 1);
       }
     }

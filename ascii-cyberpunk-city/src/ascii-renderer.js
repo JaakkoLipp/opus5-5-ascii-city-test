@@ -47,6 +47,10 @@ AC.Screen = (function () {
   let pLum, pGlyph, pR, pG, pB;           // persistence state
   let lastG, lastR, lastG2, lastB, lastBg; // what is currently on the canvas
   const lut = new Uint32Array(16);
+  const LVL = new Float32Array(16).map((_, k) => k / 15);
+  // sparse glyph masks: for every glyph, the framebuffer offsets (relative to
+  // the cell's top-left pixel) of its non-empty pixels and their alpha level
+  let spStart = null, spOff = null, spLvl = null;
 
   function init(canvasEl, glowEl) {
     canvas = canvasEl; ctx = canvas.getContext('2d', { alpha: false });
@@ -121,6 +125,19 @@ AC.Screen = (function () {
         atlas[o++] = Math.min(15, Math.round((a / 255) * 15 * 1.15));
       }
     }
+    // sparse version for the fast blit path
+    let total = 0;
+    for (let k = 0; k < atlas.length; k++) if (atlas[k]) total++;
+    spStart = new Int32Array(n + 1); spOff = new Int32Array(total); spLvl = new Uint8Array(total);
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      spStart[i] = w;
+      let o = i * CW * CH;
+      for (let y = 0; y < CH; y++) for (let x = 0; x < CW; x++, o++) {
+        if (atlas[o]) { spOff[w] = y * scr.W + x; spLvl[w] = atlas[o]; w++; }
+      }
+    }
+    spStart[n] = w;
   }
 
   // ------------------------------------------------------------- edge pass
@@ -215,26 +232,36 @@ AC.Screen = (function () {
   function present() {
     const cols = scr.cols, rows = scr.rows, CW = scr.CW, CH = scr.CH, W = scr.W;
     const dGlyph = scr.dGlyph, dR = scr.dR, dG = scr.dG, dB = scr.dB, bR = scr.dBgR, bG = scr.dBgG, bB = scr.dBgB;
-    const cellPx = CW * CH;
-    let drawn = 0;
+    const cellPx = CW * CH, BLACK = 0xff000000;
+    let drawn = 0, i = 0;
     for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const i = r * cols + c;
+      let p0 = r * CH * W;
+      for (let c = 0; c < cols; c++, i++, p0 += CW) {
         const g = dGlyph[i], R = dR[i], Gc = dG[i], B = dB[i];
         const bg = (bR[i]) | (bG[i] << 8) | (bB[i] << 16);
-        if (lastG[i] === g && lastR[i] === R && lastG2[i] === Gc && lastB[i] === B && lastBg[i] === bg) continue;
-        lastG[i] = g; lastR[i] = R; lastG2[i] = Gc; lastB[i] = B; lastBg[i] = bg;
+        const og = lastG[i];
+        if (og === g && lastR[i] === R && lastG2[i] === Gc && lastB[i] === B && lastBg[i] === bg) continue;
         drawn++;
-        const br = bR[i], bgc = bG[i], bb = bB[i];
-        for (let k = 0; k < 16; k++) {
-          const a = k / 15;
-          lut[k] = 0xff000000 | (((bb + (B - bb) * a) & 255) << 16) | (((bgc + (Gc - bgc) * a) & 255) << 8) | ((br + (R - br) * a) & 255);
+        if (bg === 0 && lastBg[i] === 0 && og >= 0) {
+          // fast path on a black cell: erase the old glyph's pixels, draw the new ones
+          if (og !== g) for (let k = spStart[og], e = spStart[og + 1]; k < e; k++) fb32[p0 + spOff[k]] = BLACK;
+          if (g !== 0) {
+            for (let k = 1; k < 16; k++) { const a = LVL[k]; lut[k] = BLACK | ((B * a) << 16) | ((Gc * a) << 8) | (R * a); }
+            for (let k = spStart[g], e = spStart[g + 1]; k < e; k++) fb32[p0 + spOff[k]] = lut[spLvl[k]];
+          }
+        } else {
+          // full cell with a coloured background
+          const br = bR[i], bgc = bG[i], bb = bB[i];
+          for (let k = 0; k < 16; k++) {
+            const a = LVL[k];
+            lut[k] = BLACK | (((bb + (B - bb) * a) & 255) << 16) | (((bgc + (Gc - bgc) * a) & 255) << 8) | ((br + (R - br) * a) & 255);
+          }
+          let ao = g * cellPx, p = p0;
+          for (let y = 0; y < CH; y++, p += W) {
+            for (let x = 0; x < CW; x++) fb32[p + x] = lut[atlas[ao++]];
+          }
         }
-        let ao = g * cellPx;
-        let p = r * CH * W + c * CW;
-        for (let y = 0; y < CH; y++, p += W) {
-          for (let x = 0; x < CW; x++) fb32[p + x] = lut[atlas[ao++]];
-        }
+        lastG[i] = g; lastR[i] = R; lastG2[i] = Gc; lastB[i] = B; lastBg[i] = bg;
       }
     }
     ctx.putImageData(img, 0, 0);

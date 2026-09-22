@@ -71,9 +71,14 @@ AC.WorldGen = (function () {
     buildNav(W, plan);
     buildLanes(W);
 
-    // spawn on the sidewalk in front of the noodle bar, looking down the street
+    // spawn on the far sidewalk, across the avenue from the noodle bar, looking
+    // at its neon front; pick the first candidate with clearance from props
     const nd = W.doors.find((d) => d.kind === 'noodle');
-    W.spawn = { x: 14.4, y: nd ? nd.cy + 10.5 : 40, yaw: -Math.PI / 2 - 0.12 };
+    const tx = nd.cx + 0.5, ty = nd.cy + 0.5;
+    const clear = (x, y) => W.colliders.every((c) => Math.hypot(c.x - x, c.y - y) > (c.t === 'c' ? c.r : Math.hypot(c.hx, c.hy)) + 1.0);
+    const cands = [[1.4, ty + 6.5], [1.4, ty + 5], [1.4, ty + 8], [1.4, ty + 3.5], [1.4, ty + 9.5], [1.4, ty + 11]];
+    const [sx, sy] = cands.find(([x, y]) => clear(x, y)) || cands[0];
+    W.spawn = { x: sx, y: sy, yaw: Math.atan2(ty - sy, tx - sx) };
 
     W.finalizeStatic();
     return W;
@@ -373,9 +378,9 @@ AC.WorldGen = (function () {
   // Horizontal sign above a shop front, centred at along-coordinate a+0.5
   function addShopSign(W, f, a, text, col, anim, r, withLight) {
     const si = addSign(W, text, col, false, anim, r);
-    const px = 0.1, len = (text.length * 6 + 1) * px;
+    const px = 0.16, len = (text.length * 6 + 1) * px;
     const [x, y] = facePoint(f, a + 0.5, 0.14);
-    Models.sign(W, x, y, 3.35, 3.35 + 9 * px, len / 2, 0.12, alongYaw(f), si);
+    Models.sign(W, x, y, 3.3, 3.3 + 9 * px, len / 2, 0.12, alongYaw(f), si);
     if (withLight !== false) {
       const c = AC.ACCENT[col];
       const [lx, ly] = facePoint(f, a + 0.5, 1.6);
@@ -394,19 +399,19 @@ AC.WorldGen = (function () {
         let a = f.a0 + 2 + r.int(0, 3);
         while (a < f.a1 - 5) {
           const word = r.pick(SIGN_WORDS);
-          const need = Math.ceil(((word.length * 6 + 1) * 0.1)) + 1;
+          const need = Math.ceil(((word.length * 6 + 1) * 0.16)) + 1;
           if (a + need >= f.a1 - 1) break;
           let clash = false;
           for (let k = 0; k < need; k++) if (skip.has(a + k)) clash = true;
           if (!clash && r.chance(0.7)) {
             const col = r.pick(ACCENTS);
             const si = addSign(W, word, col, false, r.pick(['steady', 'steady', 'flicker', 'blink', 'pulse', 'cycle']), r);
-            const len = (word.length * 6 + 1) * 0.1;
+            const len = (word.length * 6 + 1) * 0.16;
             const [x, y] = facePoint(f, a + len / 2, 0.14);
-            Models.sign(W, x, y, 3.35, 4.25, len / 2, 0.12, alongYaw(f), si);
+            Models.sign(W, x, y, 3.3, 3.3 + 9 * 0.16, len / 2, 0.12, alongYaw(f), si);
             const c = AC.ACCENT[col];
-            const [lx, ly] = facePoint(f, a + len / 2, 1.7);
-            W.addLight(lx, ly, 3.0, c[0], c[1], c[2], 8, 0.95, LT.SIGN, si, 0);
+            const [lx, ly] = facePoint(f, a + len / 2, 2.4);
+            W.addLight(lx, ly, 3.2, c[0], c[1], c[2], 7, 0.8, LT.SIGN, si, 0);
             // neon tube under the sign
             if (r.chance(0.4)) {
               const [tx, ty] = facePoint(f, a + len / 2, 0.08);
@@ -431,14 +436,14 @@ AC.WorldGen = (function () {
         const a = f.a0 + 1.5 + (len - 3) * (k + r.range(0.2, 0.8)) / nBlades;
         const col = r.pick(ACCENTS);
         const si = addSign(W, word, col, true, r.pick(['steady', 'flicker', 'chase', 'blink', 'steady', 'cycle']), r);
-        const px = 0.15, hgt = (word.length * 8 + 1) * px;
-        const z0 = Math.min(b.h - hgt - 0.5, r.range(5.2, 8));
+        const px = 0.21, hgt = (word.length * 8 + 1) * px, half = 3.5 * px;
+        const z0 = Math.min(b.h - hgt - 0.5, r.range(5.0, 6.5));
         if (z0 < 4.6) continue;
-        const [x, y] = facePoint(f, a, 0.62);
-        Models.sign(W, x, y, z0, z0 + hgt, 0.5, 0.09, faceYaw(f), si);
+        const [x, y] = facePoint(f, a, 0.12 + half);
+        Models.sign(W, x, y, z0, z0 + hgt, half, 0.1, faceYaw(f), si);
         const c = AC.ACCENT[col];
-        const [lx, ly] = facePoint(f, a, 1.6);
-        W.addLight(lx, ly, z0 + hgt * 0.4, c[0], c[1], c[2], 10, 1.0, LT.SIGN, si, 0);
+        const [lx, ly] = facePoint(f, a, 2.6);
+        W.addLight(lx, ly, z0 + hgt * 0.3, c[0], c[1], c[2], 7.5, 0.75, LT.SIGN, si, 0);
         // bracket
         const [bx, by] = facePoint(f, a, 0.1);
         W.beginObject(); W.box(bx, by, z0 + hgt - 0.1, z0 + hgt + 0.05, 0.12, 0.04, faceYaw(f), M.METAL, 0); W.endObject(4);
@@ -585,7 +590,7 @@ AC.WorldGen = (function () {
         const [x, y] = sidePos(side, a, side.prop);
         const head = Models.streetLamp(W, x, y, side.dx, side.dy, a * 3 + si);
         const broken = r.chance(0.18);
-        const li = W.addLight(head.x, head.y, head.z, 1, 1, 1, 13, 0.85, broken ? LT.FLICKER : LT.LAMP, a * 7 + si, 1);
+        const li = W.addLight(head.x, head.y, head.z, 1, 1, 1, 14, 1.25, broken ? LT.FLICKER : LT.LAMP, a * 7 + si, 1, 0.42);
         W.prims[head.prim + World.P.A] = li + 1;   // lamp head glows with its light
         W.lampHeads = (W.lampHeads || []).concat([head]);
         used.push(a);
@@ -711,14 +716,14 @@ AC.WorldGen = (function () {
       for (let k = 0; k < 3; k++) W.sph(ax + 0.6 + k * 0.9, y, z, 0.2, 0.26, M.LANTERN, lanternCols[(y + k) % 4], 0, 0, y * 3 + k);
       W.endObject(12);
       const c = AC.ACCENT[lanternCols[y % 4]];
-      W.addLight(ax + 1.5, y, z - 0.3, c[0], c[1], c[2], 4.5, 0.7, LT.PULSE, y, 0);
+      W.addLight(ax + 1.5, y, z - 0.3, c[0], c[1], c[2], 4.5, 0.5, LT.PULSE, y, 0);
     }
     // neon strips on alley walls, a flickering service light, graffiti
     for (let y = 26; y < 76; y += 13) {
       const col = r.pick([1, 2, 6]);
       W.beginObject(); W.box(ax + 0.04, y, 3.0, 3.06, 1.8, 0.03, Math.PI / 2, M.NEON, col, 1, 0); W.endObject(12);
       const c = AC.ACCENT[col];
-      W.addLight(ax + 0.8, y, 2.9, c[0], c[1], c[2], 5, 0.8, LT.FLICKER, y * 5, 0);
+      W.addLight(ax + 0.8, y, 2.9, c[0], c[1], c[2], 5, 0.5, LT.FLICKER, y * 5, 0);
     }
     const tags = ['NO FUTURE', 'WAKE UP', 'DATA IS FREE', 'SYSTEM FAILURE', 'KILL ROOT', 'HACK THE PLANET', 'ZERO COOL'];
     for (let k = 0; k < 6; k++) {

@@ -53,7 +53,7 @@ AC.Particles = (function () {
   }
 
   function update(dt, cam, env, t) {
-    windX = 1.2 + Math.sin(t * 0.13) * 0.8; windY = 0.4 + Math.sin(t * 0.07) * 0.4;
+    windX = 2.6 + Math.sin(t * 0.13) * 1.2; windY = 1.2 + Math.sin(t * 0.07) * 0.8;
     // --- rain
     const want = Math.floor(env.rain * 900);
     while (nRain < want) { respawnDrop(nRain, cam, true); nRain++; }
@@ -107,6 +107,8 @@ AC.Particles = (function () {
   }
 
   const stats = { drawn: 0, rain: 0 };
+  // rain is tinted slightly cooler than the phosphor so it reads as its own layer
+  const RAIN = [0.62, 0.8, 1.0];
   function put(scr, col, row, dist, g, add, env) {
     const cols = scr.cols;
     col |= 0; row |= 0;
@@ -116,7 +118,8 @@ AC.Particles = (function () {
     stats.drawn++;
     scr.glyph[i] = g;
     const P = env.phosphor;
-    scr.fr[i] = scr.fr[i] * 0.75 + P[0] * add; scr.fg[i] = scr.fg[i] * 0.75 + P[1] * add; scr.fb[i] = scr.fb[i] * 0.75 + P[2] * add;
+    const r = P[0] * 0.4 + RAIN[0] * 0.6, gg = P[1] * 0.4 + RAIN[1] * 0.6, b = P[2] * 0.4 + RAIN[2] * 0.6;
+    scr.fr[i] = scr.fr[i] * 0.7 + r * add; scr.fg[i] = scr.fg[i] * 0.7 + gg * add; scr.fb[i] = scr.fb[i] * 0.7 + b * add;
     if (scr.gLum[i] < add / 255) scr.gLum[i] = add / 255;
   }
 

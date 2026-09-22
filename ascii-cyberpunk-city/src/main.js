@@ -17,7 +17,7 @@ AC.Main = (function () {
   let last = 0, acc = 0, simTime = 0, frameNo = 0, time = 0, bootT = 0;
   const stats = { fps: 60, rayMs: 0, postMs: 0, blitMs: 0, workMs: 0, rays: 0, steps: 0, drawn: 0 };
   const opts = { mapOn: true, helpOn: false, charH: 18, minCharH: 14, autoRes: true, maxT: 105, forceLocked: false };
-  let resTimer = 0, workAcc = 0, workN = 0, rainLevel = 2, actRng = new RNG(99);
+  let resTimer = 0, workAcc = 0, workN = 0, rainLevel = 1, actRng = new RNG(99);
   let glitch = { t: 0, row: 0, n: 0, k: 0 };
   const RAIN_LEVELS = [0, 0.45, 1];
 
@@ -194,7 +194,7 @@ AC.Main = (function () {
     const t1 = performance.now();
     AC.Raycaster.castFrame(cam, scr, 1, scr.rows - 1, opts.maxT, AC.Shading.shade);
     const t2 = performance.now();
-    if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 60, 0.2);
+    if (scr.edgeOn) AC.Screen.edges(1, scr.rows - 1, 34, 0.2);
     AC.Particles.render(scr, cam, env, frameNo);
     AC.Screen.compose(dt);
     glitchPass(dt);

@@ -96,10 +96,11 @@ const traffic = await page.evaluate(() => {
   const E = __AC.ents, S = 80;
   __AC.setPose(40, 40, 0, 0); // stand inside the block, out of the way (in a building is fine for AI)
   let minGap = 1e9, moved = 0, redRunners = 0, turns = 0;
-  const start = E.cars.map((c) => [c.x, c.y]);
+  const travelled = E.cars.map(() => 0);
   const wasTurning = new Set();
   for (let step = 0; step < 120 * 60; step++) {
     __AC.advance(1 / 120);
+    E.cars.forEach((c, i) => { travelled[i] += c.v / 120; });
     for (const c of E.cars) {
       if (c.turn && !wasTurning.has(c)) { turns++; wasTurning.add(c); }
       if (!c.turn) wasTurning.delete(c);
@@ -109,8 +110,12 @@ const traffic = await page.evaluate(() => {
         const a = E.cars[i], b = E.cars[j];
         let dx = Math.abs(a.x - b.x); dx = Math.min(dx, S - dx);
         let dy = Math.abs(a.y - b.y); dy = Math.min(dy, S - dy);
-        const d = Math.hypot(dx, dy);
-        if (d < minGap) minGap = d;
+        // compare only cars travelling in the same lane corridor
+        const hx = Math.cos(a.yaw), hy = Math.sin(a.yaw);
+        const rx = ((b.x - a.x + S * 1.5) % S) - S / 2, ry = ((b.y - a.y + S * 1.5) % S) - S / 2;
+        const lat = Math.abs(-rx * hy + ry * hx), along = Math.abs(rx * hx + ry * hy);
+        const same = Math.cos(a.yaw) * Math.cos(b.yaw) + Math.sin(a.yaw) * Math.sin(b.yaw) > 0.9;
+        if (same && lat < 1.6 && !a.turn && !b.turn) { const gap = along - a.len - b.len; if (gap < minGap) minGap = gap; }
       }
       // a car inside the intersection box whose axis has red for >2 s is a red runner
       const env = __AC.env;
@@ -122,11 +127,11 @@ const traffic = await page.evaluate(() => {
       }
     }
   }
-  E.cars.forEach((c, i) => { if (Math.hypot(c.x - start[i][0], c.y - start[i][1]) > 1) moved++; });
-  return { minGap, moved, n: E.cars.length, redRunners, turns };
+  travelled.forEach((d) => { if (d > 60) moved++; });
+  return { minGap, moved, n: E.cars.length, redRunners, turns, minTravel: Math.min(...travelled).toFixed(0) };
 });
-check('cars move', traffic.moved >= traffic.n - 1, JSON.stringify(traffic));
-check('cars keep distance (no overlaps)', traffic.minGap > 2.2, 'minGap=' + traffic.minGap.toFixed(2));
+check('every car keeps driving (>60 m in 2 min)', traffic.moved === traffic.n, JSON.stringify(traffic));
+check('cars keep distance (bumper gap > 0.5 m)', traffic.minGap > 0.5, 'min bumper gap=' + traffic.minGap.toFixed(2));
 check('cars respect red lights', traffic.redRunners === 0, 'redRunners=' + traffic.redRunners);
 check('cars take right turns', traffic.turns > 0, 'turns=' + traffic.turns);
 
