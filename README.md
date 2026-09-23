@@ -1,4 +1,10 @@
+
 # opus 5.5 test
+walkable ASCII cyberpunk city in a single html file.
+
+-# GPT-6 version for comparison https://lowlight-ascii-city.jl117.chatgpt.site/
+
+### prompt
 Build a browser-based first-person 3D exploration game inspired by the concept of a walkable ASCII cyberpunk city.
 The implementation must be original. Do not copy source code from an existing project.
 The final result must be a playable real-time 3D city rendered primarily as ASCII characters.
