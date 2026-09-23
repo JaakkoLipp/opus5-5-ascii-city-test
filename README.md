@@ -2,7 +2,9 @@
 # opus 5.5 test
 walkable ASCII cyberpunk city in a single html file.
 
--# GPT-6 version for comparison https://lowlight-ascii-city.jl117.chatgpt.site/
+- GPT-6 version https://lowlight-ascii-city.jl117.chatgpt.site/
+- Opus 5.5 version https://jaakkolipp.github.io/opus5-5-ascii-city-test/
+
 
 ### prompt
 Build a browser-based first-person 3D exploration game inspired by the concept of a walkable ASCII cyberpunk city.
