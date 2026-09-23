@@ -291,7 +291,7 @@ const MT = {};
 let MID = 1;
 function defMat(name, r, g, b, spec) { const id = MID++; MT[name] = id; MA[id * 3] = r; MA[id * 3 + 1] = g; MA[id * 3 + 2] = b; MS[id] = spec || 0; }
 defMat('POLE', 0.30, 0.32, 0.34, 0.3); defMat('LAMP', 0.30, 0.30, 0.30, 0.2); defMat('SIGN', 0.08, 0.08, 0.09, 0.4);
-defMat('BILL', 0.06, 0.06, 0.07, 0.3); defMat('CAR', 0.4, 0.4, 0.4, 0.6); defMat('CARGLASS', 0.03, 0.04, 0.06, 1.0);
+defMat('BILL', 0.06, 0.06, 0.07, 0.3); defMat('CAR', 0.4, 0.4, 0.4, 0.6); defMat('CARGLASS', 0.02, 0.025, 0.035, 0.45);
 defMat('CHASSIS', 0.04, 0.04, 0.04, 0); defMat('PEDBODY', 0.2, 0.2, 0.2, 0.1); defMat('PEDHEAD', 0.5, 0.4, 0.35, 0.1);
 defMat('PEDLEG', 0.06, 0.06, 0.07, 0); defMat('UMB', 0.05, 0.05, 0.06, 0.5); defMat('LEDSTICK', 0.2, 0.2, 0.2, 0);
 defMat('TRUNK', 0.22, 0.17, 0.13, 0); defMat('CANOPY', 0.1, 0.28, 0.14, 0); defMat('PLANTER', 0.30, 0.30, 0.32, 0.1);
@@ -732,10 +732,10 @@ function decorateBuildings(R) {
 
 // ---------- the enterable noodle bar ----------
 function buildShop(R) {
-  const S = SHOP;
-  const b = makeBuilding(S.x0, S.y0, S.x1, S.y1, R, { style: ST_BRICK, h: 15, shop: true, plain: true });
+  const sq = SHOP;
+  const b = makeBuilding(sq.x0, sq.y0, sq.x1, sq.y1, R, { style: ST_BRICK, h: 15, shop: true, plain: true });
   b.lit = 0.55; b.tr = 0.60; b.tg = 0.44; b.tb = 0.38;
-  for (let y = S.y0 + 1; y < S.y1 - 1; y++) for (let x = S.x0 + 1; x < S.x1 - 1; x++) setVox(x, y, b.h - 1, 0);
+  for (let y = sq.y0 + 1; y < sq.y1 - 1; y++) for (let x = sq.x0 + 1; x < sq.x1 - 1; x++) setVox(x, y, b.h - 1, 0);
   // hollow ground floor, 3 m ceiling
   for (let y = 73; y <= 84; y++) for (let x = 75; x <= 86; x++) {
     for (let z = 0; z < 3; z++) setVox(x, y, z, 0);
@@ -775,8 +775,8 @@ function buildShop(R) {
   interactables.push({ kind: 'terminal', x: 75.4, y: 74.6, z: 1.15, r: 2.6, group: tg });
   addPrim(P_BOX, 79, 78.8, 2.97, 1.6, 0.12, 0.03, 0, MT.CEIL, 0, 0);
   addPrim(P_BOX, 79, 75.2, 2.97, 1.6, 0.12, 0.03, 0, MT.CEIL, 0, 0);
-  addLight(79, 78.8, 2.6, 9, 1.5, 1.15, 0.8, 0, 1);
-  addLight(79, 75.2, 2.6, 8, 1.3, 1.0, 0.75, 1, 1);
+  addLight(79, 78.8, 2.6, 9, 1.15, 0.88, 0.62, 0, 1);
+  addLight(79, 75.2, 2.6, 8, 1.0, 0.78, 0.58, 1, 1);
   addLight(79.6, 80.8, 0.8, 4.5, 1.2, 0.2, 0.8, 0, 1);
   addLight(75.9, 74.6, 1.3, 3.5, 0.2, 1.0, 0.5, 2, 1);
   // interior neon sign on the partition wall
@@ -1589,35 +1589,36 @@ function shadeGround(px, py) {
   }
 }
 
-function shadeSign(p, S, f, u, w) {
+function shadeSign(p, sg, f, u, w) {
   if (f !== 2 && f !== 3) { S.ar = S.ag = S.ab = 0.12; S.k = 0.4; return; }
   const hx = pHX[p], hz = pHZ[p];
   const u01 = f === 2 ? (hx - u) / (2 * hx) : (u + hx) / (2 * hx);
   const v01 = (hz - w) / (2 * hz);
-  const n = S.text.length;
+  const n = sg.text.length;
   let px = 0, li = 0;
-  if (!S.vertical) {
+  if (!sg.vertical) {
     const gw = n * 4 + 1, gh = 7;
     const gx = Math.min(gw - 1, (u01 * gw) | 0), gy = Math.min(gh - 1, (v01 * gh) | 0);
     if (gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1) px = 2;
-    else { li = ((gx - 1) / 4) | 0; const col = (gx - 1) % 4, row = gy - 1; if (col < 3 && row < 5 && fontBit(S.text.charCodeAt(li), row, col)) px = 1; }
+    else { li = ((gx - 1) / 4) | 0; const col = (gx - 1) % 4, row = gy - 1; if (col < 3 && row < 5 && fontBit(sg.text.charCodeAt(li), row, col)) px = 1; }
   } else {
     const gw = 5, gh = n * 6 + 1;
     const gx = Math.min(gw - 1, (u01 * gw) | 0), gy = Math.min(gh - 1, (v01 * gh) | 0);
     if (gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1) px = 2;
-    else { li = ((gy - 1) / 6) | 0; const row = (gy - 1) % 6, col = gx - 1; if (row < 5 && col < 3 && fontBit(S.text.charCodeAt(li), row, col)) px = 1; }
+    else { li = ((gy - 1) / 6) | 0; const row = (gy - 1) % 6, col = gx - 1; if (row < 5 && col < 3 && fontBit(sg.text.charCodeAt(li), row, col)) px = 1; }
   }
-  const c = S.col;
-  S.ar = S.ag = S.ab = 0.05;
+  const c = sg.col;
+  // matte black backing so the tube letters stand out
+  S.ar = S.ag = S.ab = 0.012; S.k = 0;
   if (px === 1) {
-    let on = S.lvl;
-    if (li > S.seq) on = 0.06;
-    if (li === S.dead) on *= 0.12;
-    S.er = c[0] * 2.4 * on; S.eg = c[1] * 2.4 * on; S.eb = c[2] * 2.4 * on;
+    let on = sg.lvl;
+    if (li > sg.seq) on = 0.06;
+    if (li === sg.dead) on *= 0.12;
+    S.er = c[0] * 3.4 * on; S.eg = c[1] * 3.4 * on; S.eb = c[2] * 3.4 * on;
   } else if (px === 2) {
-    const k = 0.9 * S.lvl;
-    S.er = S.c2[0] * k; S.eg = S.c2[1] * k; S.eb = S.c2[2] * k;
-  } else { S.er = c[0] * 0.06; S.eg = c[1] * 0.06; S.eb = c[2] * 0.06; }
+    const k = 0.9 * sg.lvl;
+    S.er = sg.c2[0] * k; S.eg = sg.c2[1] * k; S.eb = sg.c2[2] * k;
+  } else { S.er = c[0] * 0.025; S.eg = c[1] * 0.025; S.eb = c[2] * 0.025; }
 }
 
 function shadeBill(p, B, f, u, w) {
@@ -1625,7 +1626,7 @@ function shadeBill(p, B, f, u, w) {
   const hx = pHX[p], hz = pHZ[p];
   const uu = hx - u, vv = hz - w;
   const lvl = B.lvl;
-  S.ar = S.ag = S.ab = 0.03;
+  S.ar = S.ag = S.ab = 0.012; S.k = 0;
   if (uu < 0.12 || vv < 0.12 || uu > 2 * hx - 0.12 || vv > 2 * hz - 0.12) { S.er = B.c2[0] * 0.7 * lvl; S.eg = B.c2[1] * 0.7 * lvl; S.eb = B.c2[2] * 0.7 * lvl; return; }
   let k1 = 0, k2 = 0;
   if (B.mode === 0) {
@@ -1719,7 +1720,14 @@ function shadePrim(px, py, pz) {
       }
     } break;
     case MT.PEDSIG: if (f < 4) {
-      if (pedWalk(id)) { S.er = 0.8; S.eg = 1.1; S.eb = 1.3; } else { S.er = 1.4; S.eg = 0.5; S.eb = 0.1; }
+      // 5 x 7 symbol: walking figure or raised hand on a dark face
+      const hc = f < 2 ? v : u;
+      const gx = Math.floor((hc + pHY[p]) / (2 * pHY[p]) * 5), gy = Math.floor((pHZ[p] - w) / (2 * pHZ[p]) * 7);
+      const walk = pedWalk(id), pat = walk ? PSIG_WALK : PSIG_HAND;
+      S.ar = S.ag = S.ab = 0.03; S.k = 0;
+      if (gx >= 0 && gx < 5 && gy >= 0 && gy < 7 && pat.charCodeAt(gy * 5 + gx) === 35) {
+        if (walk) { S.er = 1.0; S.eg = 1.4; S.eb = 1.6; } else { S.er = 1.9; S.eg = 0.6; S.eb = 0.1; }
+      }
     } break;
     case MT.DOOR: if (f < 2) {
       if (Math.abs(v) > pHY[p] - 0.07 || Math.abs(w) > pHZ[p] - 0.07 || Math.abs(w - 0.25) < 0.03) { S.er = 0.15; S.eg = 0.9; S.eb = 1.0; }
@@ -1796,6 +1804,8 @@ function shadePrim(px, py, pz) {
   }
 }
 
+const PSIG_WALK = '..#..' + '.###.' + '#.#.#' + '..#..' + '.#.#.' + '.#.#.' + '#...#';
+const PSIG_HAND = '.#.#.' + '.####' + '.####' + '#####' + '#####' + '.###.' + '.###.';
 // ---------- sky, distant skyline, flying traffic ----------
 const flyers = [];
 function initFlyers(R) {
@@ -1851,6 +1861,29 @@ function shadeSky(i, dx, dy, dz, kind, t) {
   finish(i, r, g, b, em, 999, id, 1, em ? 0 : 1.6);
 }
 
+// ---------- wet ground reflections ----------
+// A wet patch casts one mirrored ray and keeps only the emitted light it finds:
+// neon, windows, lamps and car lights show up as colored smears in the puddles.
+const RE = { r: 0.5, g: 0.5, b: 0.5 };
+function reflectEmission(px, py, dx, dy, dz) {
+  const ar = S.ar, ag = S.ag, ab = S.ab, er = S.er, eg = S.eg, eb = S.eb, k = S.k, ind = S.ind, id = S.id;
+  const jit = (hash3((px * 5) | 0, (py * 5) | 0, (time * 7) | 0) - 0.5) * 0.05;   // rain ripples
+  let rx = dx + jit, ry = dy - jit, rz = -dz;
+  const il = 1 / Math.sqrt(rx * rx + ry * ry + rz * rz);
+  rx *= il; ry *= il; rz *= il;
+  let r = 0, g = 0, b = 0;
+  const kind = castRay(px, py, 0.01, rx, ry, rz, 30);
+  if (kind === K_VOX || kind === K_PRIM) {
+    const t = HIT.t, qx = px + rx * t, qy = py + ry * t, qz = 0.01 + rz * t;
+    S.er = S.eg = S.eb = 0;
+    if (kind === K_VOX) shadeVoxel(qx, qy, qz, HIT.nx, HIT.ny, HIT.nz); else shadePrim(qx, qy, qz);
+    const q = t / 26, f = Math.exp(-q * q);
+    r = S.er * f; g = S.eg * f; b = S.eb * f;
+  }
+  S.ar = ar; S.ag = ag; S.ab = ab; S.er = er; S.eg = eg; S.eb = eb; S.k = k; S.ind = ind; S.id = id;
+  RE.r = r; RE.g = g; RE.b = b;
+}
+
 // ---------- per cell shading and glyph selection ----------
 function shadeCell(i, ox, oy, oz, dx, dy, dz) {
   const kind = HIT.kind, t = HIT.t;
@@ -1860,7 +1893,14 @@ function shadeCell(i, ox, oy, oz, dx, dy, dz) {
   S.ar = S.ag = S.ab = 0.3; S.er = S.eg = S.eb = 0; S.k = 0; S.ind = 0; S.id = 1;
   S.tex = hash3((px * 2.3) | 0, (py * 2.3) | 0, (pz * 2.3) | 0);
   if (kind === K_VOX) shadeVoxel(px, py, pz, nx, ny, nz);
-  else if (kind === K_GROUND) shadeGround(px, py);
+  else if (kind === K_GROUND) {
+    shadeGround(px, py);
+    if (S.k >= 1.05 && !S.ind && t < 34 && state.reflect) {
+      reflectEmission(px, py, dx, dy, dz);
+      const kf = 0.3 + 0.45 * (1 + dz);
+      S.er += RE.r * kf; S.eg += RE.g * kf; S.eb += RE.b * kf;
+    }
+  }
   else shadePrim(px, py, pz);
   gatherLight(px + nx * 0.03, py + ny * 0.03, pz + nz * 0.03, nx, ny, nz, S.ind, S.k, -dx, -dy, -dz);
   let amb, abr, abg, abb;
@@ -1975,9 +2015,9 @@ function rainPass() {
     const dist = Math.sqrt(rx * rx + ry * ry + rz * rz);
     let idx = r * cols + c;
     if (depthA[idx] < dist || emisA[idx]) continue;
-    const kk = Math.exp(-dist * 0.09);
+    const kk = Math.exp(-dist * 0.08);
     const g = dist < 3.5 ? G_PIPE : dist < 9 ? G_QUOTE : G_DOT;
-    const R = (40 + 70 * kk) | 0, Gc = (55 + 85 * kk) | 0, B = (75 + 100 * kk) | 0;
+    const R = (45 + 95 * kk) | 0, Gc = (60 + 115 * kk) | 0, B = (80 + 135 * kk) | 0;
     glyphA[idx] = g; colRA[idx] = R; colGA[idx] = Gc; colBA[idx] = B;
     if (dist < 3 && r + 1 < rows) { idx += cols; if (depthA[idx] > dist && !emisA[idx]) { glyphA[idx] = G_PIPE; colRA[idx] = R; colGA[idx] = Gc; colBA[idx] = B; } }
   }
@@ -2369,7 +2409,7 @@ function updateCars(dt) {
 // =====================================================================
 // 14. INTERACTIONS
 // =====================================================================
-const state = { credits: CFG.startCredits, ramen: 0, cola: 0, map: false, showMap: false, glow: true, rain: true, edges: true, started: false, wasLocked: false };
+const state = { credits: CFG.startCredits, ramen: 0, cola: 0, map: false, showMap: false, glow: true, rain: true, edges: true, reflect: true, started: false, wasLocked: false };
 let focus = null, hiGroup = -1, toastT = 0;
 const dlg = { open: false, who: '', lines: [], i: 0, shown: 0, onEnd: null, hint: '', sx: 0, sy: 0 };
 const term = { open: false, text: '', shown: 0 };
@@ -2525,6 +2565,7 @@ window.addEventListener('keydown', e => {
     case 'KeyG': state.glow = !state.glow; glowCanvas.style.display = state.glow ? 'block' : 'none'; toast(state.glow ? 'glow on' : 'glow off'); break;
     case 'KeyR': state.rain = !state.rain; toast(state.rain ? 'rain on' : 'rain off'); break;
     case 'KeyX': state.edges = !state.edges; toast(state.edges ? 'outlines on' : 'outlines off'); break;
+    case 'KeyF': state.reflect = !state.reflect; toast(state.reflect ? 'wet reflections on' : 'wet reflections off'); break;
     case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': setQuality(parseInt(e.code.slice(5), 10) - 1); break;
   }
 });
@@ -2670,7 +2711,7 @@ function setIntro(resume) {
     `<i>w a s d</i>  walk             <i>mouse</i>  look\n` +
     `<i>shift</i>    sprint           <i>e</i>      interact\n` +
     `<i>esc</i>      release mouse    <i>1 - 4</i>  detail level\n` +
-    `<i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>m</i> map\n\n` +
+    `<i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>f</i> reflections   <i>m</i> map\n\n` +
     `start at the notice kiosk to your right.`;
 }
 
@@ -2735,7 +2776,7 @@ function boot() {
   player.x = spawn.x; player.y = spawn.y; player.yaw = spawn.yaw;
   initRain();
   resize();
-  el.hudKeys.innerHTML = '<i>wasd</i> walk   <i>mouse</i> look   <i>shift</i> sprint   <i>e</i> interact   <i>esc</i> release mouse   <i>1-4</i> detail   <i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>m</i> map';
+  el.hudKeys.innerHTML = '<i>wasd</i> walk   <i>mouse</i> look   <i>shift</i> sprint   <i>e</i> interact   <i>esc</i> release mouse   <i>1-4</i> detail   <i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>f</i> reflections   <i>m</i> map';
   setIntro(false);
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 120); });
