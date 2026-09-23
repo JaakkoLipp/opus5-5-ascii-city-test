@@ -1,0 +1,2757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kanal-9 : a walkable ascii city</title>
+<style>
+  :root{
+    --void:#000000;
+    --phosphor:#bfe3da;
+    --sodium:#ffb04a;
+    --neon:#ff4fae;
+    --ice:#5fe6ff;
+    --dim:#5f7d77;
+  }
+  html,body{margin:0;height:100%;background:var(--void);overflow:hidden;}
+  body{font-family:'DejaVu Sans Mono','Menlo','Consolas','Liberation Mono','Courier New',monospace;color:var(--phosphor);}
+  canvas{position:fixed;left:0;top:0;width:100vw;height:100vh;display:block;}
+  #screen{cursor:crosshair;}
+  #glow{pointer-events:none;mix-blend-mode:screen;opacity:.6;filter:blur(9px) brightness(1.7) saturate(1.3);}
+  #fx{position:fixed;inset:0;pointer-events:none;
+     background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.14) 3px),
+                radial-gradient(ellipse at 50% 50%,rgba(0,0,0,0) 60%,rgba(0,0,0,.55) 100%);}
+  .hud{position:fixed;margin:0;pointer-events:none;white-space:pre;font-size:13px;line-height:1.4;}
+  #hudTop{left:16px;top:12px;color:var(--sodium);text-shadow:0 0 8px rgba(255,160,60,.45);}
+  #hudTop i{color:var(--phosphor);font-style:normal;}
+  #hudKeys{left:16px;bottom:12px;color:var(--dim);}
+  #hudKeys i{color:var(--phosphor);font-style:normal;}
+  #hudMap{right:16px;top:12px;color:var(--dim);font-size:11px;line-height:1.08;border:1px solid rgba(95,230,255,.25);padding:6px 8px;background:rgba(0,4,6,.6);}
+  #hudMap .p{color:var(--sodium);} #hudMap .c{color:var(--neon);} #hudMap .h{color:var(--ice);} #hudMap .b{color:#8fb3ac;}
+  #cross{left:50%;top:50%;transform:translate(-50%,-50%);color:var(--phosphor);opacity:.5;font-size:14px;}
+  #prompt{left:50%;top:calc(50% + 30px);transform:translateX(-50%);color:var(--ice);text-shadow:0 0 10px rgba(80,230,255,.7);font-size:15px;}
+  #toast{left:50%;top:21%;transform:translateX(-50%);color:var(--sodium);font-size:14px;text-align:center;text-shadow:0 0 8px rgba(255,160,60,.5);}
+  #dialog{position:fixed;left:50%;bottom:62px;transform:translateX(-50%);width:min(640px,86vw);display:none;
+     border:1px solid rgba(255,79,174,.55);background:rgba(3,2,8,.84);padding:12px 16px;box-shadow:0 0 24px rgba(255,79,174,.18);}
+  #dlgWho{color:var(--neon);font-size:13px;margin-bottom:6px;}
+  #dlgText{margin:0;white-space:pre-wrap;font-size:15px;line-height:1.45;color:var(--phosphor);min-height:2.9em;}
+  #dlgHint{color:var(--dim);font-size:12px;margin-top:8px;text-align:right;}
+  #term{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(720px,90vw);height:min(400px,70vh);display:none;
+     border:1px solid rgba(95,230,255,.5);background:rgba(0,6,5,.93);padding:16px 20px;box-shadow:0 0 40px rgba(60,255,200,.12);overflow:hidden;}
+  #termText{margin:0;color:#7dffc8;white-space:pre-wrap;font-size:14px;line-height:1.5;text-shadow:0 0 6px rgba(80,255,190,.4);}
+  #intro{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.58);cursor:pointer;}
+  #introTitle{margin:0;color:var(--neon);font-size:clamp(7px,1.1vw,14px);line-height:1;text-shadow:0 0 14px rgba(255,79,174,.8);}
+  #introText{margin:26px 0 0;color:var(--phosphor);font-size:14px;line-height:1.7;}
+  #introText i{color:var(--sodium);font-style:normal;}
+  #introText b{color:var(--ice);font-weight:normal;}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<canvas id="glow"></canvas>
+<div id="fx"></div>
+<pre id="hudTop" class="hud"></pre>
+<pre id="hudMap" class="hud hidden"></pre>
+<pre id="hudKeys" class="hud"></pre>
+<pre id="cross" class="hud">+</pre>
+<pre id="prompt" class="hud"></pre>
+<pre id="toast" class="hud"></pre>
+<div id="dialog"><div id="dlgWho"></div><pre id="dlgText"></pre><div id="dlgHint">e to continue</div></div>
+<div id="term"><pre id="termText"></pre></div>
+<div id="intro"><pre id="introTitle"></pre><pre id="introText"></pre></div>
+<script>
+'use strict';
+(function () {
+
+// =====================================================================
+// 1. CONFIGURATION
+// =====================================================================
+const QS = new URLSearchParams(location.search);
+const CFG = {
+  seed: (parseInt(QS.get('seed') || '', 10) >>> 0) || 2077,
+  fovX: 80 * Math.PI / 180,
+  maxDist: 86,
+  fogDist: 58,                  // squared exponential fog: exp(-(d / fogDist)^2)
+  fog: [0.020, 0.017, 0.036],
+  eyeHeight: 1.65,
+  walkSpeed: 3.4,
+  sprintSpeed: 7.4,
+  accel: 10,
+  mouseSens: 0.0022,
+  radius: 0.3,
+  rowPresets: [40, 52, 64, 78],
+  quality: Math.min(3, Math.max(0, parseInt(QS.get('q') || '2', 10) || 0)),
+  maxCellPx: 18,
+  cellAspect: 0.6,
+  ramp: ' .,:;+*ioxe%#&@',
+  font: "'DejaVu Sans Mono','Menlo','Consolas','Liberation Mono','Courier New',monospace",
+  exposure: 1.9,
+  ink: [0.70, 0.88, 0.84],
+  rainDrops: 520,
+  startCredits: 60,
+};
+
+// =====================================================================
+// 2. UTILITY FUNCTIONS
+// =====================================================================
+const PI = Math.PI, TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+let SALT = 0;
+function ihash(x) {
+  x |= 0;
+  x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
+  x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
+  return (x ^ (x >>> 16)) >>> 0;
+}
+// deterministic hash of three integers, result in [0,1)
+function hash3(a, b, c) {
+  return ihash(Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x61c88647) ^ SALT) / 4294967296;
+}
+function angleTo(a, b, maxStep) {
+  let d = b - a;
+  while (d > PI) d -= TAU;
+  while (d < -PI) d += TAU;
+  if (d > maxStep) d = maxStep; else if (d < -maxStep) d = -maxStep;
+  return a + d;
+}
+
+// 3x5 bitmap font used by neon signs and billboards (rows top to bottom, 3 bits each)
+const FONT_SRC = {
+  A: '010101111101101', B: '110101110101110', C: '011100100100011', D: '110101101101110',
+  E: '111100110100111', F: '111100110100100', G: '011100101101011', H: '101101111101101',
+  I: '111010010010111', J: '001001001101010', K: '101101110101101', L: '100100100100111',
+  M: '101111111101101', N: '110101101101101', O: '010101101101010', P: '110101110100100',
+  Q: '010101101110011', R: '110101110101101', S: '011100010001110', T: '111010010010010',
+  U: '101101101101111', V: '101101101101010', W: '101101111111101', X: '101101010101101',
+  Y: '101101010010010', Z: '111001010100111', 0: '111101101101111', 1: '010110010010111',
+  2: '110001010100111', 3: '110001010001110', 4: '101101111001001', 5: '111100110001110',
+  6: '011100111101111', 7: '111001010010010', 8: '111101111101111', 9: '111101111001110',
+  '-': '000000111000000', '+': '000010111010000', '.': '000000000000010', '!': '010010010000010',
+  ':': '000010000010000', '/': '001001010100100', ' ': '000000000000000',
+};
+const FONT = new Int32Array(128);
+for (const k in FONT_SRC) FONT[k.charCodeAt(0)] = parseInt(FONT_SRC[k], 2);
+function fontBit(code, row, col) { return (FONT[code & 127] >> (14 - (row * 3 + col))) & 1; }
+
+// =====================================================================
+// 3. SEEDED RANDOM GENERATION
+// =====================================================================
+class RNG {
+  constructor(seed) { this.s = seed >>> 0; }
+  next() {
+    let t = (this.s = (this.s + 0x6D2B79F5) >>> 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  range(a, b) { return a + (b - a) * this.next(); }
+  int(a, b) { return a + Math.floor(this.next() * (b - a + 1)); }
+  chance(p) { return this.next() < p; }
+  pick(arr) { return arr[Math.floor(this.next() * arr.length)]; }
+}
+
+// =====================================================================
+// 4. WORLD REPRESENTATION
+//    Static architecture: a 128 x 128 column grid, 64 levels of 1 m.
+//    Each column keeps a 64-bit occupancy mask (two Int32 words) so a ray
+//    can find the first solid level inside a column with bit operations.
+//    Props, vehicles and people are analytic primitives (box, cylinder,
+//    sphere) registered in per-tile linked lists.
+// =====================================================================
+const W = 128, D = 128, H = 64, WD = W * D;
+const colLo = new Int32Array(WD), colHi = new Int32Array(WD);
+const colTop = new Uint8Array(WD);
+const vox = new Uint8Array(WD * H);          // voxel material, index c*H + z
+const gmat = new Uint8Array(WD);             // ground material per tile
+const bldOf = new Int16Array(WD);            // building id per tile (-1 none)
+const tflag = new Uint8Array(WD);            // tile flags
+
+const G_LOT = 0, G_ROAD = 1, G_WALK = 2, G_ALLEY = 3, G_FLOOR = 4, G_TUNNEL = 5;
+const F_INDOOR = 1, F_NOWALK = 2, F_ALLEY = 4, F_PERIM = 8, F_CROSS = 16;
+const V_BLDG = 1, V_WALLIN = 2, V_ROOFBOX = 3;
+
+function setVox(x, y, z, m) {
+  if (x < 0 || y < 0 || x >= W || y >= D || z < 0 || z >= H) return;
+  const c = y * W + x;
+  vox[c * H + z] = m;
+  if (m) { if (z < 32) colLo[c] |= 1 << z; else colHi[c] |= 1 << (z - 32); }
+  else { if (z < 32) colLo[c] &= ~(1 << z); else colHi[c] &= ~(1 << (z - 32)); }
+}
+function isSolidLevel(c, l) { return l < 32 ? (colLo[c] >>> l) & 1 : (colHi[c] >>> (l - 32)) & 1; }
+function topOf(c) { const hi = colHi[c], lo = colLo[c]; return hi ? 64 - Math.clz32(hi) : (lo ? 32 - Math.clz32(lo) : 0); }
+function fixTops() { for (let c = 0; c < WD; c++) colTop[c] = topOf(c); }
+function rangeMask(a, b) { return (b >= 31 ? -1 : ((1 << (b + 1)) - 1)) & (-1 << a); }
+// lowest solid level in [a,b] of column c, or -1
+function firstUp(c, a, b) {
+  if (a <= 31) { const m = colLo[c] & rangeMask(a, b < 31 ? b : 31); if (m) return 31 - Math.clz32(m & -m); }
+  if (b >= 32) { const m = colHi[c] & rangeMask(a > 32 ? a - 32 : 0, b - 32); if (m) return 63 - Math.clz32(m & -m); }
+  return -1;
+}
+// highest solid level in [b,a] of column c (scanning down from a), or -1
+function firstDown(c, a, b) {
+  if (a >= 32) { const m = colHi[c] & rangeMask(b > 32 ? b - 32 : 0, a - 32); if (m) return 63 - Math.clz32(m); }
+  if (b <= 31) { const m = colLo[c] & rangeMask(b, a < 31 ? a : 31); if (m) return 31 - Math.clz32(m); }
+  return -1;
+}
+
+// ---- primitives (struct of arrays) ----
+const P_BOX = 0, P_CYL = 1, P_SPH = 2;
+const PF_COLLIDE = 1;
+const MAXP = 8192;
+const pType = new Uint8Array(MAXP), pMat = new Uint8Array(MAXP), pFlag = new Uint8Array(MAXP);
+const pX = new Float32Array(MAXP), pY = new Float32Array(MAXP), pZ = new Float32Array(MAXP);
+const pHX = new Float32Array(MAXP), pHY = new Float32Array(MAXP), pHZ = new Float32Array(MAXP);
+const pC = new Float32Array(MAXP), pS = new Float32Array(MAXP);
+const pBot = new Float32Array(MAXP), pTop = new Float32Array(MAXP);
+const pId = new Int32Array(MAXP), pGroup = new Int32Array(MAXP), pMail = new Int32Array(MAXP);
+let nPrim = 0, nStatic = 0;
+
+// box: half extents hx,hy,hz, yaw around z. cylinder: hx = radius, hz = half height. sphere: hx = radius.
+function addPrim(type, x, y, z, hx, hy, hz, yaw, mat, id, flags, group) {
+  if (nPrim >= MAXP) return -1;
+  const p = nPrim++;
+  pType[p] = type; pMat[p] = mat; pFlag[p] = flags || 0;
+  pX[p] = x; pY[p] = y; pZ[p] = z;
+  pHX[p] = hx; pHY[p] = type === P_BOX ? hy : hx; pHZ[p] = type === P_SPH ? hx : hz;
+  pC[p] = Math.cos(yaw || 0); pS[p] = Math.sin(yaw || 0);
+  pBot[p] = z - pHZ[p]; pTop[p] = z + pHZ[p];
+  pId[p] = id || 0; pGroup[p] = group === undefined ? -1 : group;
+  return p;
+}
+
+// per-tile linked lists: static lists are built once, dynamic lists every frame
+const LMAX = 160000;
+const lNext = new Int32Array(LMAX), lPrim = new Int32Array(LMAX);
+const headS = new Int32Array(WD).fill(-1), headD = new Int32Array(WD).fill(-1);
+const topS = new Float32Array(WD), topD = new Float32Array(WD);   // highest primitive top per tile
+const CHN = (W >> 3) * (D >> 3);
+const chunkTopS = new Float32Array(CHN), chunkTopD = new Float32Array(CHN);   // highest geometry per 8 x 8 chunk
+let lCount = 0, lStatic = 0;
+function registerPrim(p, head) {
+  const tops = head === headS ? topS : topD, pt = pTop[p];
+  let ex, ey;
+  if (pType[p] === P_BOX) {
+    const c = Math.abs(pC[p]), s = Math.abs(pS[p]);
+    ex = c * pHX[p] + s * pHY[p]; ey = s * pHX[p] + c * pHY[p];
+  } else { ex = ey = pHX[p]; }
+  const x0 = Math.max(0, Math.floor(pX[p] - ex)), x1 = Math.min(W - 1, Math.floor(pX[p] + ex));
+  const y0 = Math.max(0, Math.floor(pY[p] - ey)), y1 = Math.min(D - 1, Math.floor(pY[p] + ey));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (lCount >= LMAX) return;
+    const c = y * W + x;
+    lPrim[lCount] = p; lNext[lCount] = head[c]; head[c] = lCount++;
+    if (pt > tops[c]) tops[c] = pt;
+    if (head === headD) { const k = (y >> 3) * (W >> 3) + (x >> 3); if (pt > chunkTopD[k]) chunkTopD[k] = pt; }
+  }
+}
+
+// ---- point lights, bucketed per tile (1 m) ----
+const MAXL = 1024;
+const lX = new Float32Array(MAXL), lY = new Float32Array(MAXL), lZ = new Float32Array(MAXL);
+const lRad = new Float32Array(MAXL), lR2 = new Float32Array(MAXL);
+const lBr = new Float32Array(MAXL), lBg = new Float32Array(MAXL), lBb = new Float32Array(MAXL);
+const lEr = new Float32Array(MAXL), lEg = new Float32Array(MAXL), lEb = new Float32Array(MAXL);
+const lFlk = new Uint8Array(MAXL), lIn = new Uint8Array(MAXL), lPh = new Float32Array(MAXL);
+let nLight = 0, nLightS = 0;
+const cHeadS = new Int32Array(WD).fill(-1), cHeadD = new Int32Array(WD).fill(-1);
+const CMAX = 400000;
+const cNext = new Int32Array(CMAX), cLight = new Int32Array(CMAX);
+let cCount = 0, cStatic = 0;
+// flicker modes: 0 steady, 1 buzzing tube, 2 slow pulse, 3 follows sign, 4 follows billboard, 5 traffic signal
+function addLight(x, y, z, rad, r, g, b, flk, indoor) {
+  if (nLight >= MAXL) return -1;
+  const L = nLight++;
+  lX[L] = x; lY[L] = y; lZ[L] = z; lRad[L] = rad; lR2[L] = rad * rad;
+  lBr[L] = r; lBg[L] = g; lBb[L] = b; lEr[L] = r; lEg[L] = g; lEb[L] = b;
+  lFlk[L] = flk || 0; lIn[L] = indoor ? 1 : 0; lPh[L] = 0;
+  return L;
+}
+// a light is listed in every tile whose footprint lies inside its radius
+function registerLight(L, head) {
+  const r = lRad[L], x = lX[L], y = lY[L], r2 = r * r;
+  const x0 = Math.max(0, Math.floor(x - r)), x1 = Math.min(W - 1, Math.floor(x + r));
+  const y0 = Math.max(0, Math.floor(y - r)), y1 = Math.min(D - 1, Math.floor(y + r));
+  for (let ty = y0; ty <= y1; ty++) {
+    const dy = y < ty ? ty - y : y > ty + 1 ? y - ty - 1 : 0;
+    for (let tx = x0; tx <= x1; tx++) {
+      const dx = x < tx ? tx - x : x > tx + 1 ? x - tx - 1 : 0;
+      if (dx * dx + dy * dy >= r2) continue;
+      if (cCount >= CMAX) return;
+      const k = ty * W + tx;
+      cLight[cCount] = L; cNext[cCount] = head[k]; head[k] = cCount++;
+    }
+  }
+}
+
+// ---- materials for primitives ----
+const MA = new Float32Array(64 * 3), MS = new Float32Array(64);
+const MT = {};
+let MID = 1;
+function defMat(name, r, g, b, spec) { const id = MID++; MT[name] = id; MA[id * 3] = r; MA[id * 3 + 1] = g; MA[id * 3 + 2] = b; MS[id] = spec || 0; }
+defMat('POLE', 0.30, 0.32, 0.34, 0.3); defMat('LAMP', 0.30, 0.30, 0.30, 0.2); defMat('SIGN', 0.08, 0.08, 0.09, 0.4);
+defMat('BILL', 0.06, 0.06, 0.07, 0.3); defMat('CAR', 0.4, 0.4, 0.4, 0.6); defMat('CARGLASS', 0.03, 0.04, 0.06, 1.0);
+defMat('CHASSIS', 0.04, 0.04, 0.04, 0); defMat('PEDBODY', 0.2, 0.2, 0.2, 0.1); defMat('PEDHEAD', 0.5, 0.4, 0.35, 0.1);
+defMat('PEDLEG', 0.06, 0.06, 0.07, 0); defMat('UMB', 0.05, 0.05, 0.06, 0.5); defMat('LEDSTICK', 0.2, 0.2, 0.2, 0);
+defMat('TRUNK', 0.22, 0.17, 0.13, 0); defMat('CANOPY', 0.1, 0.28, 0.14, 0); defMat('PLANTER', 0.30, 0.30, 0.32, 0.1);
+defMat('TLIGHT', 0.08, 0.08, 0.08, 0.2); defMat('PEDSIG', 0.08, 0.08, 0.08, 0.2); defMat('DOOR', 0.28, 0.30, 0.33, 0.5);
+defMat('COUNTER', 0.32, 0.18, 0.12, 0.3); defMat('SHELF', 0.10, 0.10, 0.11, 0); defMat('SCREEN', 0.05, 0.05, 0.05, 0.3);
+defMat('DESK', 0.15, 0.15, 0.17, 0.2); defMat('RACK', 0.05, 0.05, 0.06, 0.2); defMat('CEIL', 0.3, 0.3, 0.3, 0);
+defMat('STOOL', 0.45, 0.12, 0.12, 0.3); defMat('VEND', 0.25, 0.25, 0.30, 0.4); defMat('BIN', 0.18, 0.20, 0.20, 0.1);
+defMat('DUMP', 0.12, 0.20, 0.15, 0.2); defMat('CRATE', 0.36, 0.27, 0.16, 0); defMat('BENCH', 0.30, 0.22, 0.15, 0.1);
+defMat('HYDRANT', 0.50, 0.10, 0.08, 0.3); defMat('AWNING', 0.3, 0.3, 0.3, 0); defMat('TANK', 0.25, 0.24, 0.22, 0.1);
+defMat('ANTENNA', 0.30, 0.30, 0.30, 0.2); defMat('NEON', 0.2, 0.2, 0.2, 0); defMat('LANTERN', 0.4, 0.1, 0.05, 0);
+defMat('KIOSK', 0.12, 0.13, 0.15, 0.3); defMat('FRIDGE', 0.20, 0.22, 0.25, 0.3); defMat('POT', 0.30, 0.20, 0.14, 0);
+defMat('KEEPER', 0.45, 0.42, 0.38, 0); defMat('BOLLARD', 0.50, 0.42, 0.08, 0.2); defMat('TABLE', 0.25, 0.20, 0.18, 0.4);
+defMat('PLANT', 0.10, 0.30, 0.12, 0); defMat('BAG', 0.05, 0.05, 0.06, 0.6); defMat('WALLLAMP', 0.2, 0.2, 0.2, 0);
+
+// shared palettes
+const NEON = [[1.0, 0.16, 0.70], [0.12, 0.82, 1.0], [1.0, 0.55, 0.10], [0.60, 0.28, 1.0], [1.0, 0.20, 0.26], [0.40, 1.0, 0.55]];
+const WINPAL = [
+  [[1.0, 0.72, 0.38], [1.0, 0.84, 0.55], [0.55, 0.72, 1.0], [1.0, 0.62, 0.32]],
+  [[0.60, 0.85, 1.0], [0.85, 0.95, 1.0], [0.42, 0.62, 1.0], [0.9, 0.9, 0.8]],
+  [[0.75, 1.0, 0.80], [0.90, 1.0, 0.90], [1.0, 0.80, 0.50], [0.7, 0.95, 0.85]],
+  [[1.0, 0.35, 0.75], [0.35, 0.90, 1.0], [1.0, 0.75, 0.40], [0.7, 0.5, 1.0]],
+];
+const TLC = [[1.0, 0.12, 0.08], [1.0, 0.62, 0.06], [0.20, 1.0, 0.45]];
+const CAR_COLS = [[0.50, 0.10, 0.12], [0.10, 0.15, 0.35], [0.55, 0.55, 0.58], [0.08, 0.08, 0.09], [0.60, 0.45, 0.10], [0.15, 0.35, 0.30], [0.35, 0.12, 0.40], [0.42, 0.44, 0.46]];
+
+// =====================================================================
+// 5. PROCEDURAL CITY GENERATION
+//    Layout: one north-south avenue crossing one east-west street,
+//    four blocks with alleys, a ring of perimeter megastructures with
+//    road tunnels, and one hand-placed enterable noodle bar.
+// =====================================================================
+const AV0 = 58, AV1 = 70, ST0 = 58, ST1 = 68, PERIM = 6;
+const BLOCKS = [
+  { x0: 6, y0: 6, x1: 54, y1: 54, av: 'E', st: 'N', name: 'rust yards' },
+  { x0: 74, y0: 6, x1: 122, y1: 54, av: 'W', st: 'N', name: 'neon market' },
+  { x0: 6, y0: 72, x1: 54, y1: 122, av: 'E', st: 'S', name: 'kowloon stacks' },
+  { x0: 74, y0: 72, x1: 122, y1: 122, av: 'W', st: 'S', name: 'chrome heights' },
+];
+const SHOP = { x0: 74, y0: 72, x1: 88, y1: 86 };
+const ST_GLASS = 0, ST_CONCRETE = 1, ST_BRICK = 2, ST_IND = 3, ST_MEGA = 4;
+const WORDS = ['RAMEN', 'SUSHI', 'BAR', 'HOTEL', 'NOODLE', 'CLUB', 'DATA', 'CYBER', 'KARAOKE', 'ARCADE', 'LOVE', 'NEON',
+  'OPEN', '24H', 'TATTOO', 'PAWN', 'CHROME', 'DELI', 'ROBOT', 'NET', 'VIDEO', 'TAXI', 'DOJO', 'DINER', 'SAKE', 'MOTEL',
+  'REPAIR', 'IMPLANT', 'CLINIC', 'GYM', 'TEA', 'PHO', 'UDON', 'ZEN', 'VOID', 'GRID', 'SYNTH', 'NOIR', 'SOBA', 'LIQUOR', 'MEDS', 'BOOKS'];
+const BILLWORDS = ['BUY MORE SLEEP LESS', 'KANAL TELECOM', 'DREAM IN CHROME', 'SYNTH-COLA ZERO', 'NEW YOU CLINIC',
+  'OBEY THE GRID', 'TIGER BALM 2', 'NIGHT NEVER ENDS'];
+
+const buildings = [], signs = [], bills = [], interactables = [];
+const alleyMouths = [], alleyRuns = [], parkedCols = [];
+const SKY_BINS = 256;
+const skyH = new Float32Array(SKY_BINS), skyBeacon = new Uint8Array(SKY_BINS);
+let worldTop = 64;
+const spawn = { x: 72, y: 12, yaw: PI / 2 };
+
+function generateCity(seed) {
+  SALT = ihash(seed ^ 0x5bd1e995);
+  const R = new RNG(seed);
+  colLo.fill(0); colHi.fill(0); colTop.fill(0); vox.fill(0); gmat.fill(0); tflag.fill(0); bldOf.fill(-1);
+  headS.fill(-1); headD.fill(-1); cHeadS.fill(-1); cHeadD.fill(-1); topS.fill(0); topD.fill(0);
+  nPrim = 0; nLight = 0; lCount = 0; cCount = 0;
+  buildings.length = 0; signs.length = 0; bills.length = 0; interactables.length = 0;
+  alleyMouths.length = 0; alleyRuns.length = 0; parkedCols.length = 0;
+
+  layoutGround();
+  buildPerimeter(R);
+  for (const B of BLOCKS) buildBlock(B, R);
+  buildShop(R);
+  decorateBuildings(R);
+  placeStreetProps(R);
+  placeTraffic();
+  placeParkedCars(R);
+  decorateAlleys(R);
+  makeSkyline(R);
+
+  fixTops();
+  nStatic = nPrim;
+  for (let p = 0; p < nStatic; p++) registerPrim(p, headS);
+  lStatic = lCount;
+  nLightS = nLight;
+  for (let L = 0; L < nLightS; L++) registerLight(L, cHeadS);
+  cStatic = cCount;
+  worldTop = 0;
+  for (let c = 0; c < WD; c++) if (colTop[c] > worldTop) worldTop = colTop[c];
+  for (let p = 0; p < nStatic; p++) if (pTop[p] > worldTop) worldTop = pTop[p];
+  worldTop += 0.5;
+  chunkTopS.fill(0);
+  for (let y = 0; y < D; y++) for (let x = 0; x < W; x++) {
+    const c = y * W + x, k = (y >> 3) * (W >> 3) + (x >> 3);
+    const t = Math.max(colTop[c], topS[c]);
+    if (t > chunkTopS[k]) chunkTopS[k] = t;
+  }
+}
+
+function layoutGround() {
+  for (let y = 0; y < D; y++) for (let x = 0; x < W; x++) {
+    const c = y * W + x;
+    const onAv = x >= AV0 && x < AV1, onSt = y >= ST0 && y < ST1;
+    const wAv = (x >= 54 && x < 58) || (x >= 70 && x < 74);
+    const wSt = (y >= 54 && y < 58) || (y >= 68 && y < 72);
+    let g = G_LOT, f = 0;
+    if (onAv || onSt) { g = G_ROAD; if (wAv || wSt) f |= F_CROSS; }
+    else if (wAv || wSt) g = G_WALK;
+    if (x < PERIM || y < PERIM || x >= W - PERIM || y >= D - PERIM) { f |= F_PERIM | F_NOWALK; if (g === G_ROAD) g = G_TUNNEL; }
+    gmat[c] = g; tflag[c] = f;
+  }
+}
+
+function styleParams(b, R) {
+  const P = [
+    { floorH: 4, pitch: 1.6, winW: 1.3, wz0: 0.35, wz1: 3.65, lit: 0.30, pal: 1, t: [0.50, 0.62, 0.72] },
+    { floorH: 3, pitch: R.pick([2.5, 3, 3.5]), winW: 1.4, wz0: 0.9, wz1: 2.3, lit: 0.42, pal: 0, t: [0.58, 0.58, 0.60] },
+    { floorH: 3, pitch: 2, winW: 1.0, wz0: 0.8, wz1: 2.4, lit: 0.45, pal: 0, t: [0.62, 0.48, 0.42] },
+    { floorH: 4, pitch: 4, winW: 3.6, wz0: 2.3, wz1: 3.2, lit: 0.30, pal: 2, t: [0.48, 0.54, 0.50] },
+    { floorH: 3, pitch: 1.25, winW: 0.75, wz0: 0.8, wz1: 2.2, lit: 0.22, pal: 3, t: [0.45, 0.47, 0.55] },
+  ][b.style];
+  b.floorH = P.floorH; b.pitch = P.pitch; b.winW = P.winW; b.wz0 = P.wz0; b.wz1 = P.wz1; b.lit = P.lit + R.range(-0.08, 0.08);
+  b.pal = R.chance(0.2) ? R.int(0, 3) : P.pal;
+  const j = R.range(-0.06, 0.06);
+  b.tr = P.t[0] + j + R.range(-0.03, 0.03); b.tg = P.t[1] + j; b.tb = P.t[2] + j + R.range(-0.03, 0.03);
+}
+
+// which sides of a footprint face open ground (sidewalk, road or alley)
+function buildingSides(b) {
+  const out = [];
+  const mx = Math.floor((b.x0 + b.x1) / 2), my = Math.floor((b.y0 + b.y1) / 2);
+  const test = (x, y) => (x < 0 || y < 0 || x >= W || y >= D) ? -1 : (bldOf[y * W + x] >= 0 ? -1 : gmat[y * W + x]);
+  out.push({ side: 'W', nx: -1, ny: 0, plane: b.x0, a0: b.y0, a1: b.y1, g: test(b.x0 - 1, my) });
+  out.push({ side: 'E', nx: 1, ny: 0, plane: b.x1, a0: b.y0, a1: b.y1, g: test(b.x1, my) });
+  out.push({ side: 'S', nx: 0, ny: -1, plane: b.y0, a0: b.x0, a1: b.x1, g: test(mx, b.y0 - 1) });
+  out.push({ side: 'N', nx: 0, ny: 1, plane: b.y1, a0: b.x0, a1: b.x1, g: test(mx, b.y1) });
+  return out;
+}
+
+function carveRing(x0, y0, x1, y1, sb, zs, h) {
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const e = Math.min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y);
+    if (e < sb) for (let z = zs; z < h; z++) setVox(x, y, z, 0);
+  }
+}
+
+function makeBuilding(x0, y0, x1, y1, R, opt) {
+  const w = x1 - x0, d = y1 - y0;
+  const b = { id: buildings.length, x0, y0, x1, y1, style: opt.style, h: Math.min(H - 4, opt.h), shop: !!opt.shop, perim: !!opt.perim, arcade: '', setback: false };
+  styleParams(b, R);
+  buildings.push(b);
+  const h = b.h;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    bldOf[y * W + x] = b.id;
+    for (let z = 0; z < h; z++) setVox(x, y, z, V_BLDG);
+  }
+  if (opt.plain) return b;
+  // stepped setbacks
+  if (h >= 14 && w >= 8 && d >= 8 && R.chance(0.55)) {
+    const sb = R.int(1, Math.min(3, Math.floor(Math.min(w, d) / 4)));
+    const zs = R.int(Math.floor(h * 0.4), Math.floor(h * 0.75));
+    carveRing(x0, y0, x1, y1, sb, zs, h);
+    b.setback = true;
+    if (h >= 28 && R.chance(0.5) && Math.min(w, d) - 2 * sb >= 7) {
+      const sb2 = sb + R.int(1, 2), zs2 = R.int(zs + 3, h - 3);
+      carveRing(x0, y0, x1, y1, sb2, zs2, h);
+    }
+  } else if (w >= 4 && d >= 4) {
+    // parapet ring around a flat roof
+    for (let y = y0 + 1; y < y1 - 1; y++) for (let x = x0 + 1; x < x1 - 1; x++) setVox(x, y, h - 1, 0);
+  }
+  // arcade: recessed ground floor with pillars along a sidewalk
+  if (!b.perim && b.style !== ST_GLASS && R.chance(0.3)) {
+    const sd = buildingSides(b).filter(s => s.g === G_WALK);
+    if (sd.length) {
+      const s = sd[0];
+      b.arcade = s.side;
+      const len = s.a1 - s.a0;
+      for (let k = 0; k < len; k++) {
+        if (k === 0 || k === len - 1 || k % 4 === 0) continue;
+        const x = s.nx !== 0 ? (s.nx < 0 ? x0 : x1 - 1) : s.a0 + k;
+        const y = s.nx !== 0 ? s.a0 + k : (s.ny < 0 ? y0 : y1 - 1);
+        for (let z = 0; z < 3; z++) setVox(x, y, z, 0);
+        gmat[y * W + x] = G_WALK;
+      }
+    }
+  }
+  // rooftop machinery (voxel boxes)
+  if (w >= 5 && d >= 5) {
+    const n = R.int(0, 3);
+    for (let i = 0; i < n; i++) {
+      const sx = R.int(1, 2), sy = R.int(1, 2), hh = R.int(1, 2);
+      const x = R.int(x0 + 1, x1 - 1 - sx), y = R.int(y0 + 1, y1 - 1 - sy);
+      const top = topOf(y * W + x);
+      if (top < 4 || top + hh >= H) continue;
+      for (let yy = y; yy < y + sy; yy++) for (let xx = x; xx < x + sx; xx++) for (let z = top; z < top + hh; z++) setVox(xx, yy, z, V_ROOFBOX);
+    }
+  }
+  return b;
+}
+
+function pickStyleHeight(R, x0, y0, x1, y1) {
+  const w = x1 - x0, d = y1 - y0, area = w * d;
+  const near = Math.max(0, 1 - Math.hypot((x0 + x1) / 2 - 64, (y0 + y1) / 2 - 63) / 70);
+  const r = R.next();
+  let style;
+  if (area < 45) style = r < 0.6 ? ST_BRICK : ST_IND;
+  else if (r < 0.25) style = ST_GLASS; else if (r < 0.5) style = ST_CONCRETE;
+  else if (r < 0.7) style = ST_BRICK; else if (r < 0.85) style = ST_MEGA; else style = ST_IND;
+  let h;
+  switch (style) {
+    case ST_GLASS: h = R.int(22, 42) + near * 14; break;
+    case ST_CONCRETE: h = R.int(12, 30); break;
+    case ST_BRICK: h = R.int(7, 16); break;
+    case ST_IND: h = R.int(6, 12); break;
+    default: h = R.int(26, 48);
+  }
+  if (Math.min(w, d) < 5) h = Math.min(h, 14);
+  return { style, h: Math.round(h) };
+}
+
+function splitLots(x0, y0, x1, y1, R, out) {
+  const w = x1 - x0, d = y1 - y0;
+  if (w <= 0 || d <= 0) return;
+  const big = w > 18 || d > 18;
+  if (!big && (w < 11 || d < 11 || R.chance(0.35))) { out.push([x0, y0, x1, y1]); return; }
+  if (w >= d && w >= 10) { const s = x0 + R.int(5, w - 5); splitLots(x0, y0, s, y1, R, out); splitLots(s, y0, x1, y1, R, out); }
+  else if (d >= 10) { const s = y0 + R.int(5, d - 5); splitLots(x0, y0, x1, s, R, out); splitLots(x0, s, x1, y1, R, out); }
+  else out.push([x0, y0, x1, y1]);
+}
+
+function carveAlley(x0, y0, x1, y1) {
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const c = y * W + x;
+    gmat[c] = G_ALLEY; tflag[c] |= F_ALLEY;
+  }
+}
+
+function buildPerimeter(R) {
+  const strips = [
+    { horiz: true, a0: 0, a1: W, b0: 0, b1: PERIM, gate: [54, 74], n: [0, 1] },
+    { horiz: true, a0: 0, a1: W, b0: D - PERIM, b1: D, gate: [54, 74], n: [0, -1] },
+    { horiz: false, a0: PERIM, a1: D - PERIM, b0: 0, b1: PERIM, gate: [54, 72], n: [1, 0] },
+    { horiz: false, a0: PERIM, a1: D - PERIM, b0: W - PERIM, b1: W, gate: [54, 72], n: [-1, 0] },
+  ];
+  for (const s of strips) {
+    const cuts = [s.a0];
+    let a = s.a0;
+    while (a < s.gate[0]) { a += R.int(9, 18); if (a > s.gate[0] - 5) a = s.gate[0]; cuts.push(a); }
+    a = s.gate[1]; cuts.push(a);
+    while (a < s.a1) { a += R.int(9, 18); if (a > s.a1 - 5) a = s.a1; cuts.push(a); }
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const c0 = cuts[i], c1 = cuts[i + 1];
+      const gate = c0 === s.gate[0];
+      const rect = s.horiz ? [c0, s.b0, c1, s.b1] : [s.b0, c0, s.b1, c1];
+      const h = gate ? R.int(30, 38) : (R.chance(0.22) ? R.int(10, 16) : R.int(24, 50));
+      const style = gate ? ST_MEGA : R.pick([ST_GLASS, ST_MEGA, ST_MEGA, ST_CONCRETE]);
+      const b = makeBuilding(rect[0], rect[1], rect[2], rect[3], R, { style, h, perim: true });
+      if (gate) {
+        // road tunnel through the gate megastructure
+        for (let y = rect[1]; y < rect[3]; y++) for (let x = rect[0]; x < rect[2]; x++) {
+          if (gmat[y * W + x] !== G_TUNNEL) continue;
+          for (let z = 0; z < 7; z++) setVox(x, y, z, 0);
+        }
+        // tunnel ceiling lights near the mouth
+        const along = s.horiz;
+        const cx = along ? 64 : (s.n[0] > 0 ? 3 : W - 3), cy = along ? (s.n[1] > 0 ? 3 : D - 3) : 63;
+        addLight(cx, cy, 6.2, 9, 1.4, 0.7, 0.25, 0, 0);
+        // inward facing billboard above the tunnel mouth
+        const plane = s.horiz ? (s.n[1] > 0 ? s.b1 : s.b0) : (s.n[0] > 0 ? s.b1 : s.b0);
+        const hx = 5.5, hz = 3.2, zc = 12.5;
+        const px = s.horiz ? 64 : plane + s.n[0] * 0.2, py = s.horiz ? plane + s.n[1] * 0.2 : 63;
+        addBillboard(px, py, zc, hx, hz, s.n[0], s.n[1], R);
+      }
+      b.gate = gate;
+    }
+  }
+}
+
+function buildBlock(B, R) {
+  const offY = R.int(16, 27), offX = R.int(16, 27);
+  const ay = B.st === 'N' ? B.y1 - offY - 3 : B.y0 + offY;
+  const ax = B.av === 'E' ? B.x1 - offX - 3 : B.x0 + offX;
+  const tee = R.chance(0.5);
+  carveAlley(B.x0, ay, B.x1, ay + 3);
+  alleyRuns.push({ axis: 'x', a0: B.x0, a1: B.x1, c0: ay, cross: ax, block: B });
+  let ys0, ys1;
+  if (B.st === 'N') { ys1 = B.y1; ys0 = tee ? ay + 3 : B.y0; } else { ys0 = B.y0; ys1 = tee ? ay : B.y1; }
+  carveAlley(ax, ys0, ax + 3, ys1);
+  alleyRuns.push({ axis: 'y', a0: ys0, a1: ys1, c0: ax, cross: ay, block: B });
+  const avEdge = B.av === 'E' ? B.x1 : B.x0, inX = B.av === 'E' ? -1 : 1;
+  const stEdge = B.st === 'N' ? B.y1 : B.y0, inY = B.st === 'N' ? -1 : 1;
+  alleyMouths.push({ x: B.av === 'E' ? 56 : 72, y: ay + 1.5, pts: [[avEdge + inX * 4, ay + 1.5], [avEdge + inX * 13, ay + 1.5]] });
+  alleyMouths.push({ x: ax + 1.5, y: B.st === 'N' ? 56 : 70, pts: [[ax + 1.5, stEdge + inY * 4], [ax + 1.5, stEdge + inY * 13]] });
+
+  const near = B.st === 'N' ? [ay + 3, B.y1] : [B.y0, ay];
+  const far = B.st === 'N' ? [B.y0, ay] : [ay + 3, B.y1];
+  const rects = [[B.x0, near[0], ax, near[1]], [ax + 3, near[0], B.x1, near[1]]];
+  if (tee) rects.push([B.x0, far[0], B.x1, far[1]]);
+  else rects.push([B.x0, far[0], ax, far[1]], [ax + 3, far[0], B.x1, far[1]]);
+  const lots = [];
+  for (const r of rects) {
+    if (r[0] <= SHOP.x0 && r[1] <= SHOP.y0 && r[2] >= SHOP.x1 && r[3] >= SHOP.y1) {
+      // keep the noodle bar lot free, split the L-shaped rest
+      splitLots(SHOP.x1, r[1], r[2], r[3], R, lots);
+      splitLots(r[0], SHOP.y1, SHOP.x1, r[3], R, lots);
+    } else splitLots(r[0], r[1], r[2], r[3], R, lots);
+  }
+  for (const L of lots) {
+    const sh = pickStyleHeight(R, L[0], L[1], L[2], L[3]);
+    makeBuilding(L[0], L[1], L[2], L[3], R, sh);
+  }
+}
+
+// ---------- signs and billboards ----------
+function addSign(text, vertical, R) {
+  const k = R.int(0, NEON.length - 1);
+  const s = { idx: signs.length, text, vertical, col: NEON[k], c2: NEON[(k + R.int(1, 4)) % NEON.length], mode: R.int(0, 3),
+    ph: R.range(0, 10), lvl: 1, seq: 99, dead: -1, deadLetter: R.chance(0.35) ? R.int(0, text.length - 1) : -1 };
+  signs.push(s);
+  return s.idx;
+}
+function facadeSolid(sd, t, z) {
+  const zi = Math.floor(z);
+  if (zi < 0 || zi >= H) return false;
+  const x = sd.nx !== 0 ? (sd.nx < 0 ? sd.plane : sd.plane - 1) : Math.floor(t);
+  const y = sd.nx !== 0 ? Math.floor(t) : (sd.ny < 0 ? sd.plane : sd.plane - 1);
+  if (x < 0 || y < 0 || x >= W || y >= D) return false;
+  return isSolidLevel(y * W + x, zi) === 1;
+}
+function addBladeSign(b, sd, t, R, word, colIdx) {
+  word = word || R.pick(WORDS);
+  const n = word.length;
+  const cell = Math.min(0.2, 6.2 / (n * 6 + 1));
+  const hz = (n * 6 + 1) * cell / 2, hx = 2.5 * cell;
+  const zc = 3.8 + hz + R.range(0, 1.2);
+  if (!facadeSolid(sd, t, zc + hz) || !facadeSolid(sd, t, zc - hz)) return false;
+  const px = sd.nx !== 0 ? sd.plane + sd.nx * hx : t;
+  const py = sd.nx !== 0 ? t : sd.plane + sd.ny * hx;
+  const si = addSign(word, true, R);
+  if (colIdx !== undefined) signs[si].col = NEON[colIdx];
+  addPrim(P_BOX, px, py, zc, hx, 0.08, hz, Math.atan2(sd.ny, sd.nx), MT.SIGN, si, 0);
+  const c = signs[si].col;
+  const L = addLight(px + sd.nx * 0.5, py + sd.ny * 0.5, zc - hz * 0.4, 9, c[0] * 1.4, c[1] * 1.4, c[2] * 1.4, 3, 0);
+  lPh[L] = si;
+  return true;
+}
+function addShopSign(b, sd, t, R, word, zc, colIdx) {
+  word = word || R.pick(WORDS);
+  const n = word.length, cell = 0.13;
+  const hx = (n * 4 + 1) * cell / 2, hz = 3.5 * cell;
+  if (2 * hx > sd.a1 - sd.a0 - 1) return false;
+  t = clamp(t, sd.a0 + hx + 0.4, sd.a1 - hx - 0.4);
+  zc = zc || (b.arcade === sd.side ? 3.55 : 3.1);
+  if (!facadeSolid(sd, t, zc)) return false;
+  const px = sd.nx !== 0 ? sd.plane + sd.nx * 0.12 : t;
+  const py = sd.nx !== 0 ? t : sd.plane + sd.ny * 0.12;
+  const si = addSign(word, false, R);
+  if (colIdx !== undefined) signs[si].col = NEON[colIdx];
+  addPrim(P_BOX, px, py, zc, hx, 0.1, hz, Math.atan2(-sd.nx, sd.ny), MT.SIGN, si, 0);
+  const c = signs[si].col;
+  const L = addLight(px + sd.nx * 0.9, py + sd.ny * 0.9, zc - 0.5, 7.5, c[0] * 1.3, c[1] * 1.3, c[2] * 1.3, 3, 0);
+  lPh[L] = si;
+  return true;
+}
+function addBillboard(px, py, zc, hx, hz, nx, ny, R) {
+  const k = R.int(0, NEON.length - 1);
+  const B = { idx: bills.length, text: R.pick(BILLWORDS), mode: R.int(0, 2), c1: NEON[k], c2: NEON[(k + R.int(1, 5)) % NEON.length],
+    cell: 2 * hz / 9, ph: R.range(0, 10), lvl: 1 };
+  bills.push(B);
+  addPrim(P_BOX, px, py, zc, hx, 0.15, hz, Math.atan2(-nx, ny), MT.BILL, B.idx, 0);
+  const L = addLight(px + nx * 3.5, py + ny * 3.5, zc, 18, B.c1[0] * 1.7, B.c1[1] * 1.7, B.c1[2] * 1.7, 4, 0);
+  lPh[L] = B.idx;
+}
+
+function decorateBuildings(R) {
+  for (const b of buildings) {
+    if (b.shop) continue;
+    const sides = buildingSides(b);
+    // rooftop props
+    const cx = Math.floor((b.x0 + b.x1) / 2), cy = Math.floor((b.y0 + b.y1) / 2);
+    const top = topOf(cy * W + cx);
+    if ((b.style === ST_CONCRETE || b.style === ST_BRICK) && R.chance(0.4) && b.x1 - b.x0 >= 6 && b.y1 - b.y0 >= 6) {
+      const tx = b.x0 + 2.5, ty = b.y0 + 2.5, tt = topOf(Math.floor(ty) * W + Math.floor(tx));
+      addPrim(P_CYL, tx, ty, tt + 1.4, 1.0, 0, 1.1, 0, MT.TANK, 0, 0);
+    }
+    if ((b.style === ST_GLASS || b.style === ST_MEGA) && b.h >= 24 && R.chance(0.6)) {
+      const ah = R.range(3, 8);
+      addPrim(P_BOX, cx + 0.5, cy + 0.5, top + ah / 2, 0.07, 0.07, ah / 2, 0, MT.ANTENNA, R.int(0, 100), 0);
+    }
+    if (b.perim) continue;
+    for (const sd of sides) {
+      if (sd.g !== G_WALK) continue;
+      const len = sd.a1 - sd.a0;
+      let used = -99;
+      if (R.chance(0.65) && len >= 4) {
+        const t = R.range(sd.a0 + 1.2, sd.a1 - 1.2);
+        if (addBladeSign(b, sd, t, R)) used = t;
+      }
+      if (R.chance(0.5)) {
+        let t = R.range(sd.a0 + 2, sd.a1 - 2);
+        if (Math.abs(t - used) < 3.5) t = used + (t < used ? -3.5 : 3.5);
+        addShopSign(b, sd, t, R);
+      }
+      if (b.arcade !== sd.side && R.chance(0.3) && len >= 5) {
+        const hx = R.range(1.3, 2.2), t = clamp(R.range(sd.a0 + 2, sd.a1 - 2), sd.a0 + hx + 0.3, sd.a1 - hx - 0.3);
+        if (Math.abs(t - used) > 1.2) {
+          const px = sd.nx !== 0 ? sd.plane + sd.nx * 0.7 : t, py = sd.nx !== 0 ? t : sd.plane + sd.ny * 0.7;
+          const ci = R.int(0, NEON.length - 1);
+          addPrim(P_BOX, px, py, 2.55, hx, 0.7, 0.05, Math.atan2(-sd.nx, sd.ny), MT.AWNING, ci, 0);
+          const c = NEON[ci];
+          addLight(px + sd.nx * 0.3, py + sd.ny * 0.3, 2.3, 5.5, 0.5 + c[0] * 0.5, 0.35 + c[1] * 0.4, 0.25 + c[2] * 0.4, 0, 0);
+        }
+      }
+      if (b.h >= 22 && b.style !== ST_BRICK && R.chance(0.35) && bills.length < 12 && len >= 9) {
+        const hx = R.range(3, Math.min(4.5, len / 2 - 1)), hz = R.range(2.2, 3.2);
+        const zc = R.range(9 + hz, Math.max(9 + hz, Math.min(b.h - hz - 2, 26)));
+        const t = R.range(sd.a0 + hx + 0.5, sd.a1 - hx - 0.5);
+        if (facadeSolid(sd, t, zc + hz) && facadeSolid(sd, t - hx + 0.3, zc) && facadeSolid(sd, t + hx - 0.3, zc)) {
+          const px = sd.nx !== 0 ? sd.plane + sd.nx * 0.16 : t, py = sd.nx !== 0 ? t : sd.plane + sd.ny * 0.16;
+          addBillboard(px, py, zc, hx, hz, sd.nx, sd.ny, R);
+        }
+      }
+    }
+    // neon tube on a street corner of tall towers
+    if ((b.style === ST_GLASS || b.style === ST_MEGA) && R.chance(0.4)) {
+      const street = sides.filter(s => s.g === G_WALK);
+      if (street.length) {
+        const s = street[0];
+        const corner = s.nx !== 0 ? [s.plane, R.chance(0.5) ? b.y0 : b.y1] : [R.chance(0.5) ? b.x0 : b.x1, s.plane];
+        const tx = Math.min(W - 1, Math.max(0, corner[0] - (corner[0] === b.x1 ? 1 : 0)));
+        const ty = Math.min(D - 1, Math.max(0, corner[1] - (corner[1] === b.y1 ? 1 : 0)));
+        const ct = topOf(ty * W + tx);
+        if (ct > 10) {
+          const ox = corner[0] === b.x1 ? 0.06 : -0.06, oy = corner[1] === b.y1 ? 0.06 : -0.06;
+          const ci = R.int(0, NEON.length - 1), hz = (ct * 0.93 - 4) / 2;
+          addPrim(P_BOX, corner[0] + ox, corner[1] + oy, 4 + hz, 0.07, 0.07, hz, 0, MT.NEON, ci, 0);
+          const c = NEON[ci];
+          addLight(corner[0] + ox * 12, corner[1] + oy * 12, 5, 8, c[0] * 1.2, c[1] * 1.2, c[2] * 1.2, 2, 0);
+        }
+      }
+    }
+  }
+}
+
+// ---------- the enterable noodle bar ----------
+function buildShop(R) {
+  const S = SHOP;
+  const b = makeBuilding(S.x0, S.y0, S.x1, S.y1, R, { style: ST_BRICK, h: 15, shop: true, plain: true });
+  b.lit = 0.55; b.tr = 0.60; b.tg = 0.44; b.tb = 0.38;
+  for (let y = S.y0 + 1; y < S.y1 - 1; y++) for (let x = S.x0 + 1; x < S.x1 - 1; x++) setVox(x, y, b.h - 1, 0);
+  // hollow ground floor, 3 m ceiling
+  for (let y = 73; y <= 84; y++) for (let x = 75; x <= 86; x++) {
+    for (let z = 0; z < 3; z++) setVox(x, y, z, 0);
+    const c = y * W + x; gmat[c] = G_FLOOR; tflag[c] |= F_INDOOR;
+  }
+  // doorway on the avenue side
+  for (let y = 78; y <= 79; y++) {
+    for (let z = 0; z < 2; z++) setVox(74, y, z, 0);
+    const c = y * W + 74; gmat[c] = G_FLOOR; tflag[c] |= F_INDOOR;
+  }
+  // partition to the back room
+  for (let y = 73; y <= 84; y++) for (let z = 0; z < 3; z++) if (!((y === 76 || y === 77) && z < 2)) setVox(83, y, z, V_WALLIN);
+
+  // exterior signs
+  const west = { side: 'W', nx: -1, ny: 0, plane: 74, a0: 72, a1: 86 };
+  const south = { side: 'S', nx: 0, ny: -1, plane: 72, a0: 74, a1: 88 };
+  addBladeSign(b, west, 83.5, R, 'RAMEN', 0);
+  signs[signs.length - 1].mode = 0;
+  addShopSign(b, west, 79, R, 'BLACKSTAR', 3.1, 1);
+  signs[signs.length - 1].mode = 0; signs[signs.length - 1].deadLetter = -1;
+  addShopSign(b, south, 81, R, 'NOODLES', 3.1, 2);
+  addLight(73.2, 79, 2.6, 5, 0.3, 0.9, 1.1, 0, 0);
+
+  // interior props
+  addPrim(P_BOX, 79.6, 81.55, 0.55, 2.6, 0.35, 0.55, 0, MT.COUNTER, 0, PF_COLLIDE);
+  addPrim(P_BOX, 77.35, 82.75, 0.55, 0.35, 0.85, 0.55, 0, MT.COUNTER, 1, PF_COLLIDE);
+  addPrim(P_BOX, 80.2, 84.65, 1.25, 2.6, 0.32, 1.25, 0, MT.SHELF, 0, PF_COLLIDE);
+  for (const x of [78.2, 79.6, 81.0]) addPrim(P_CYL, x, 80.65, 0.38, 0.2, 0, 0.38, 0, MT.STOOL, 0, PF_COLLIDE);
+  addPrim(P_CYL, 79.0, 76.3, 0.74, 0.62, 0, 0.04, 0, MT.TABLE, 0, PF_COLLIDE);
+  addPrim(P_CYL, 79.0, 76.3, 0.36, 0.07, 0, 0.36, 0, MT.POLE, 0, 0);
+  addPrim(P_CYL, 77.95, 76.3, 0.3, 0.18, 0, 0.3, 0, MT.STOOL, 0, PF_COLLIDE);
+  addPrim(P_CYL, 80.05, 76.3, 0.3, 0.18, 0, 0.3, 0, MT.STOOL, 0, PF_COLLIDE);
+  addPrim(P_BOX, 80.8, 73.45, 1.0, 1.1, 0.42, 1.0, 0, MT.FRIDGE, 0, PF_COLLIDE);
+  addPrim(P_BOX, 75.55, 74.6, 0.4, 0.5, 0.95, 0.4, 0, MT.DESK, 0, PF_COLLIDE);
+  const tg = interactables.length;
+  addPrim(P_BOX, 75.35, 74.6, 1.15, 0.05, 0.62, 0.36, 0, MT.SCREEN, 0, 0, tg);
+  interactables.push({ kind: 'terminal', x: 75.4, y: 74.6, z: 1.15, r: 2.6, group: tg });
+  addPrim(P_BOX, 79, 78.8, 2.97, 1.6, 0.12, 0.03, 0, MT.CEIL, 0, 0);
+  addPrim(P_BOX, 79, 75.2, 2.97, 1.6, 0.12, 0.03, 0, MT.CEIL, 0, 0);
+  addLight(79, 78.8, 2.6, 9, 1.5, 1.15, 0.8, 0, 1);
+  addLight(79, 75.2, 2.6, 8, 1.3, 1.0, 0.75, 1, 1);
+  addLight(79.6, 80.8, 0.8, 4.5, 1.2, 0.2, 0.8, 0, 1);
+  addLight(75.9, 74.6, 1.3, 3.5, 0.2, 1.0, 0.5, 2, 1);
+  // interior neon sign on the partition wall
+  const inner = { side: 'W', nx: -1, ny: 0, plane: 83, a0: 78, a1: 84 };
+  const si = addSign('OPEN 24H', false, R);
+  signs[si].col = NEON[0]; signs[si].mode = 1; signs[si].deadLetter = -1;
+  addPrim(P_BOX, 82.9, 81.0, 2.2, (8 * 4 + 1) * 0.09 / 2, 0.06, 3.5 * 0.09, Math.atan2(1, 0), MT.SIGN, si, 0);
+  const Ls = addLight(82.2, 81.0, 2.1, 5, 1.1, 0.2, 0.8, 3, 1); lPh[Ls] = si;
+  void inner;
+  // server racks in the back room
+  for (let k = 0; k < 4; k++) addPrim(P_BOX, 86.55, 79.2 + k * 1.2, 1.05, 0.4, 0.55, 1.05, 0, MT.RACK, k, PF_COLLIDE);
+  addLight(85, 81, 2.3, 7, 0.25, 0.45, 1.1, 1, 1);
+  addPrim(P_CYL, 75.6, 84.3, 0.25, 0.28, 0, 0.25, 0, MT.POT, 0, PF_COLLIDE);
+  addPrim(P_SPH, 75.6, 84.3, 0.9, 0.5, 0, 0, 0, MT.PLANT, 0, 0);
+  // dynamic parts: door and cook
+  door.group = interactables.length;
+  interactables.push({ kind: 'door', x: 74.5, y: 79, z: 1.1, r: 2.8, group: door.group });
+  keeper.group = interactables.length;
+  interactables.push({ kind: 'keeper', x: keeper.x, y: keeper.y, z: 1.5, r: 3.4, group: keeper.group });
+}
+
+// ---------- sidewalk furniture ----------
+const SW_LINES = [
+  { axis: 'y', edge: 54, dir: 1, segs: [[7, 53], [73, 121]] },
+  { axis: 'y', edge: 74, dir: -1, segs: [[7, 53], [73, 121]] },
+  { axis: 'x', edge: 54, dir: 1, segs: [[7, 53], [75, 121]] },
+  { axis: 'x', edge: 72, dir: -1, segs: [[7, 53], [75, 121]] },
+];
+function swPos(L, t, dist) { const o = L.edge + L.dir * dist; return L.axis === 'y' ? [o, t] : [t, o]; }
+function facadeTileOf(L, t) {
+  const o = L.dir > 0 ? L.edge - 1 : L.edge;
+  const ti = Math.floor(t);
+  return L.axis === 'y' ? ti * W + o : o * W + ti;
+}
+function placeStreetProps(R) {
+  let vendCount = 0, kioskDone = false;
+  for (let li = 0; li < SW_LINES.length; li++) {
+    const L = SW_LINES[li];
+    const yawOut = L.axis === 'y' ? (L.dir > 0 ? 0 : PI) : (L.dir > 0 ? PI / 2 : -PI / 2);
+    for (const [a, b] of L.segs) {
+      const low = b < 60;
+      const step = low ? -13 : 13;
+      for (let t = low ? b - 5 : a + 5; t >= a && t <= b; t += step) {
+        // street lamp at the curb with an arm over the road
+        const [x, y] = swPos(L, t, 3.55);
+        addPrim(P_CYL, x, y, 3.1, 0.08, 0, 3.1, 0, MT.POLE, 0, PF_COLLIDE);
+        const ax = L.axis === 'y' ? L.dir : 0, ay = L.axis === 'x' ? L.dir : 0;
+        addPrim(P_BOX, x + ax * 0.7, y + ay * 0.7, 6.22, ax ? 0.7 : 0.05, ay ? 0.7 : 0.05, 0.05, 0, MT.POLE, 0, 0);
+        const r = R.next();
+        let col = r < 0.68 ? [1.0, 0.62, 0.30] : r < 0.9 ? [0.62, 0.8, 1.0] : [1.0, 0.35, 0.8];
+        const Li = addLight(x + ax * 1.3, y + ay * 1.3, 5.8, 12.5, col[0] * 1.9, col[1] * 1.9, col[2] * 1.9, R.chance(0.12) ? 1 : 0, 0);
+        addPrim(P_BOX, x + ax * 1.35, y + ay * 1.35, 6.08, ax ? 0.36 : 0.16, ay ? 0.36 : 0.16, 0.07, 0, MT.LAMP, Li, 0);
+        // tree half way to the next lamp
+        const tt = t + step / 2;
+        if (tt > a + 3 && tt < b - 3 && R.chance(0.65)) {
+          const [tx, ty] = swPos(L, tt, 3.2);
+          addPrim(P_BOX, tx, ty, 0.22, 0.5, 0.5, 0.22, 0, MT.PLANTER, 0, PF_COLLIDE);
+          addPrim(P_CYL, tx, ty, 1.35, 0.12, 0, 1.2, 0, MT.TRUNK, 0, 0);
+          addPrim(P_SPH, tx, ty, 3.3, R.range(1.2, 1.55), 0, 0, 0, MT.CANOPY, R.chance(0.3) ? 1 : 0, 0);
+        }
+      }
+      // building side furniture
+      for (let t = a + 2.5; t < b - 2; t += R.range(4, 9)) {
+        const ft = facadeTileOf(L, t);
+        if (bldOf[ft] < 0 || gmat[ft] !== G_LOT || isSolidLevel(ft, 0) === 0) continue;
+        if (li === 1 && t > 75 && t < 83) continue;            // noodle bar door
+        if (li === 1 && low && t > 6 && t < 32) {               // spawn area: the notice kiosk
+          if (!kioskDone && t > 18) {
+            const [kx, ky] = swPos(L, t, 0.4);
+            const g = interactables.length;
+            addPrim(P_BOX, kx, ky, 1.0, 0.3, 0.5, 1.0, yawOut, MT.KIOSK, 0, PF_COLLIDE, g);
+            interactables.push({ kind: 'kiosk', x: kx, y: ky, z: 1.3, r: 2.6, group: g });
+            addLight(kx + L.dir * 0.9, ky, 1.6, 4, 0.3, 0.6, 1.2, 2, 0);
+            kioskDone = true;
+          }
+          continue;
+        }
+        const r = R.next();
+        if (r < 0.14 && vendCount < 4) {
+          const [vx, vy] = swPos(L, t, 0.42);
+          const g = interactables.length, ci = R.int(0, NEON.length - 1);
+          addPrim(P_BOX, vx, vy, 0.97, 0.38, 0.5, 0.97, yawOut, MT.VEND, ci, PF_COLLIDE, g);
+          interactables.push({ kind: 'vending', x: vx, y: vy, z: 1.2, r: 2.4, group: g });
+          const c = NEON[ci];
+          addLight(vx + (L.axis === 'y' ? L.dir : 0) * 1.1, vy + (L.axis === 'x' ? L.dir : 0) * 1.1, 1.3, 4.5, c[0] * 0.8 + 0.2, c[1] * 0.8 + 0.2, c[2] * 0.8 + 0.2, 0, 0);
+          vendCount++;
+        } else if (r < 0.45) {
+          const [bx, by] = swPos(L, t, 0.45);
+          addPrim(P_CYL, bx, by, 0.45, 0.28, 0, 0.45, 0, MT.BIN, 0, PF_COLLIDE);
+        } else if (r < 0.62) {
+          const [bx, by] = swPos(L, t, 0.5);
+          addPrim(P_BOX, bx, by, 0.25, L.axis === 'y' ? 0.25 : 0.9, L.axis === 'y' ? 0.9 : 0.25, 0.25, 0, MT.BENCH, 0, PF_COLLIDE);
+        } else if (r < 0.74) {
+          const [hx, hy] = swPos(L, t, 3.3);
+          addPrim(P_CYL, hx, hy, 0.38, 0.15, 0, 0.38, 0, MT.HYDRANT, 0, PF_COLLIDE);
+        } else if (r < 0.84) {
+          const [cx, cy] = swPos(L, t, 0.55);
+          addPrim(P_BOX, cx, cy, 0.35, 0.4, 0.4, 0.35, R.range(-0.3, 0.3), MT.CRATE, 0, PF_COLLIDE);
+          addPrim(P_BOX, cx, cy, 0.95, 0.3, 0.3, 0.25, R.range(-0.5, 0.5), MT.CRATE, 0, 0);
+        }
+      }
+    }
+  }
+  // bollards at the four corners
+  for (const [x, y] of [[57.6, 57.6], [70.4, 57.6], [57.6, 68.4], [70.4, 68.4]]) addPrim(P_CYL, x, y, 0.5, 0.13, 0, 0.5, 0, MT.BOLLARD, 0, PF_COLLIDE);
+}
+
+// ---------- traffic signals ----------
+const APPR_GROUP = [0, 0, 1, 1];  // NB, SB -> north-south phase; EB, WB -> east-west phase
+function placeTraffic() {
+  const defs = [
+    { px: 70.45, py: 53.7, ax: -1, ay: 0, yaw: -PI / 2, appr: 0, cross: 1 },
+    { px: 57.55, py: 72.3, ax: 1, ay: 0, yaw: PI / 2, appr: 1, cross: 1 },
+    { px: 53.7, py: 57.55, ax: 0, ay: 1, yaw: PI, appr: 2, cross: 2 },
+    { px: 74.3, py: 68.45, ax: 0, ay: -1, yaw: 0, appr: 3, cross: 2 },
+  ];
+  for (const d of defs) {
+    addPrim(P_CYL, d.px, d.py, 3.0, 0.11, 0, 3.0, 0, MT.POLE, 0, PF_COLLIDE);
+    addPrim(P_BOX, d.px + d.ax * 2.1, d.py + d.ay * 2.1, 5.9, d.ax ? 2.1 : 0.06, d.ay ? 2.1 : 0.06, 0.06, 0, MT.POLE, 0, 0);
+    const hx = d.px + d.ax * 4.2, hy = d.py + d.ay * 4.2;
+    addPrim(P_BOX, hx, hy, 5.3, 0.18, 0.2, 0.55, d.yaw, MT.TLIGHT, d.appr, 0);
+    const L = addLight(hx + Math.cos(d.yaw) * 1.2, hy + Math.sin(d.yaw) * 1.2, 4.6, 7, 1, 0, 0, 5, 0);
+    lPh[L] = d.appr;
+    addPrim(P_BOX, d.px, d.py, 2.75, 0.14, 0.14, 0.17, 0, MT.PEDSIG, d.cross, 0);
+  }
+}
+
+// ---------- parked cars ----------
+function addCarPrims(x, y, yaw, id, flags) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  addPrim(P_BOX, x, y, 0.7, 2.15, 0.9, 0.36, yaw, MT.CAR, id, flags);
+  addPrim(P_BOX, x - c * 0.25, y - s * 0.25, 1.33, 1.1, 0.8, 0.27, yaw, MT.CARGLASS, id, 0);
+  addPrim(P_BOX, x, y, 0.2, 1.9, 0.82, 0.16, yaw, MT.CHASSIS, id, 0);
+}
+function placeParkedCars(R) {
+  const lanes = [
+    { axis: 'y', c: 59.25, yaw: -PI / 2, segs: [[10, 46], [81, 117]] },
+    { axis: 'y', c: 68.75, yaw: PI / 2, segs: [[10, 46], [81, 117]] },
+    { axis: 'x', c: 59.0, yaw: 0, segs: [[10, 46], [82, 117]] },
+    { axis: 'x', c: 67.0, yaw: PI, segs: [[10, 46], [82, 117]] },
+  ];
+  for (const L of lanes) for (const [a, b] of L.segs) for (let t = a; t <= b; t += 6.2) {
+    if (!R.chance(0.5)) continue;
+    const id = 1000 + parkedCols.length;
+    parkedCols.push(R.pick(CAR_COLS));
+    const x = L.axis === 'y' ? L.c : t, y = L.axis === 'y' ? t : L.c;
+    addCarPrims(x, y, L.yaw + R.range(-0.03, 0.03), id, PF_COLLIDE);
+  }
+}
+
+// ---------- alleys ----------
+function decorateAlleys(R) {
+  for (const A of alleyRuns) {
+    const lanterns = A.axis === 'x' && R.chance(0.5);
+    const yaw = A.axis === 'x' ? 0 : PI / 2;
+    const at = (t, off) => A.axis === 'x' ? [t, A.c0 + off] : [A.c0 + off, t];
+    for (let t = A.a0 + 2; t < A.a1 - 1.5; t += R.range(3.5, 7)) {
+      if (Math.abs(t - (A.cross + 1.5)) < 3.3) continue;
+      const side = R.chance(0.5) ? 0 : 1, off = side === 0 ? 0.55 : 2.45;
+      const r = R.next();
+      const [x, y] = at(t, off);
+      if (r < 0.35) {
+        addPrim(P_BOX, x, y, 0.6, 0.9, 0.45, 0.6, yaw, MT.DUMP, 0, PF_COLLIDE);
+      } else if (r < 0.55) {
+        addPrim(P_BOX, x, y, 0.35, 0.4, 0.4, 0.35, yaw + R.range(-0.3, 0.3), MT.CRATE, 0, PF_COLLIDE);
+        if (R.chance(0.6)) addPrim(P_BOX, x, y, 0.95, 0.32, 0.32, 0.25, yaw + R.range(-0.5, 0.5), MT.CRATE, 0, 0);
+      } else if (r < 0.72) {
+        addPrim(P_SPH, x, y, 0.28, 0.32, 0, 0, 0, MT.BAG, 0, PF_COLLIDE);
+        const [x2, y2] = at(t + 0.5, off + (side === 0 ? 0.25 : -0.25));
+        addPrim(P_SPH, x2, y2, 0.24, 0.27, 0, 0, 0, MT.BAG, 0, 0);
+      }
+    }
+    // wall lamps and neon tubes
+    for (let t = A.a0 + 4 + R.range(0, 3); t < A.a1 - 2; t += R.range(8, 12)) {
+      if (Math.abs(t - (A.cross + 1.5)) < 2.5) continue;
+      const side = R.chance(0.5) ? 0 : 1, off = side === 0 ? 0.08 : 2.92;
+      const [x, y] = at(t, off);
+      const pal = [[1.0, 0.6, 0.25], [0.35, 1.0, 0.5], [1.0, 0.25, 0.75], [0.3, 0.8, 1.0]];
+      const c = R.pick(pal);
+      if (R.chance(0.35)) {
+        const ci = R.int(0, NEON.length - 1);
+        addPrim(P_BOX, x, y, 3.2, 0.06, 0.06, 1.2, 0, MT.NEON, ci, 0);
+        const cc = NEON[ci];
+        addLight(x + (side === 0 ? 1 : -1) * (A.axis === 'y' ? 0.7 : 0), y + (side === 0 ? 1 : -1) * (A.axis === 'x' ? 0.7 : 0), 3.0, 6.5, cc[0], cc[1], cc[2], R.chance(0.4) ? 1 : 0, 0);
+      } else {
+        addPrim(P_BOX, x, y, 3.3, 0.14, 0.14, 0.1, yaw, MT.WALLLAMP, 0, 0);
+        const lx = x + (A.axis === 'y' ? (side === 0 ? 0.6 : -0.6) : 0), ly = y + (A.axis === 'x' ? (side === 0 ? 0.6 : -0.6) : 0);
+        const Li = addLight(lx, ly, 3.1, 7, c[0] * 1.2, c[1] * 1.2, c[2] * 1.2, R.chance(0.3) ? 1 : 0, 0);
+        pId[nPrim - 1] = Li;
+      }
+    }
+    if (lanterns) {
+      let k = 0;
+      for (let t = A.a0 + 3; t < A.a1 - 2; t += 2.4, k++) {
+        if (Math.abs(t - (A.cross + 1.5)) < 2) continue;
+        const [x, y] = at(t, 1.5);
+        addPrim(P_SPH, x, y, 3.9 + Math.sin(t) * 0.15, 0.24, 0, 0, 0, MT.LANTERN, 0, 0);
+        if (k % 3 === 0) addLight(x, y, 3.5, 5.5, 1.3, 0.3, 0.12, 0, 0);
+      }
+    }
+  }
+}
+
+// ---------- distant skyline (drawn in the sky pass) ----------
+function makeSkyline(R) {
+  let i = 0;
+  while (i < SKY_BINS) {
+    const run = R.int(2, 7), tall = R.chance(0.12);
+    const h = tall ? R.range(0.5, 0.75) : R.range(0.12, 0.45);
+    const beacon = tall || R.chance(0.2) ? 1 : 0;
+    for (let k = 0; k < run && i < SKY_BINS; k++, i++) { skyH[i] = h; skyBeacon[i] = k === (run >> 1) ? beacon : 0; }
+  }
+}
+
+// =====================================================================
+// 6. PLAYER AND CAMERA
+// =====================================================================
+let time = 0;
+const player = { x: spawn.x, y: spawn.y, vx: 0, vy: 0, yaw: spawn.yaw, pitch: 0.03, bob: 0, eyeZ: CFG.eyeHeight, speed: 0, sprint: false };
+const cam = { x: 0, y: 0, z: 0, fx: 1, fy: 0, fz: 0, rx: 0, ry: -1, ux: 0, uy: 0, uz: 1, tanX: 1, tanY: 1, fov: CFG.fovX };
+function updateCamera(dt) {
+  const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+  const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw);
+  cam.fx = cy * cp; cam.fy = sy * cp; cam.fz = sp;
+  cam.rx = sy; cam.ry = -cy;
+  cam.ux = -cy * sp; cam.uy = -sy * sp; cam.uz = cp;
+  cam.x = player.x; cam.y = player.y; cam.z = player.eyeZ;
+  // a small field of view kick while sprinting adds a sense of speed
+  const target = CFG.fovX * (player.sprint && player.speed > 4 ? 1.08 : 1);
+  cam.fov += (target - cam.fov) * Math.min(1, dt * 6);
+  cam.tanX = Math.tan(cam.fov / 2);
+  cam.tanY = cam.tanX * viewH / viewW;
+}
+
+// =====================================================================
+// 7. COLLISION
+//    The player is a circle. Solid tiles are voxel columns that are
+//    occupied at knee or chest height. Props, cars, and the door push
+//    the circle out too. Movement is split into small substeps.
+// =====================================================================
+function tileBlocks(tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= W || ty >= D) return true;
+  const c = ty * W + tx;
+  return (tflag[c] & F_NOWALK) !== 0 || (colLo[c] & 3) !== 0;
+}
+function pushOutPrim(p, pos, r) {
+  const dx = pos.x - pX[p], dy = pos.y - pY[p];
+  if (pType[p] === P_BOX) {
+    const c = pC[p], s = pS[p];
+    const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+    const hx = pHX[p], hy = pHY[p];
+    const qx = clamp(lx, -hx, hx), qy = clamp(ly, -hy, hy);
+    const ox = lx - qx, oy = ly - qy, d2 = ox * ox + oy * oy;
+    if (d2 >= r * r) return;
+    let nxl, nyl, pen;
+    if (d2 > 1e-10) { const d = Math.sqrt(d2); nxl = ox / d; nyl = oy / d; pen = r - d; }
+    else {
+      const px = hx - Math.abs(lx), py = hy - Math.abs(ly);
+      if (px < py) { nxl = lx >= 0 ? 1 : -1; nyl = 0; pen = px + r; } else { nxl = 0; nyl = ly >= 0 ? 1 : -1; pen = py + r; }
+    }
+    pos.x += (nxl * c - nyl * s) * pen; pos.y += (nxl * s + nyl * c) * pen;
+  } else {
+    const rr = pHX[p] + r, d2 = dx * dx + dy * dy;
+    if (d2 >= rr * rr) return;
+    const d = Math.sqrt(d2) || 1e-4, pen = rr - d;
+    pos.x += dx / d * pen; pos.y += dy / d * pen;
+  }
+}
+function resolveCollisions(pos, r) {
+  for (let iter = 0; iter < 3; iter++) {
+    const x0 = Math.floor(pos.x - r), x1 = Math.floor(pos.x + r), y0 = Math.floor(pos.y - r), y1 = Math.floor(pos.y + r);
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+      if (!tileBlocks(tx, ty)) continue;
+      const qx = clamp(pos.x, tx, tx + 1), qy = clamp(pos.y, ty, ty + 1);
+      const ox = pos.x - qx, oy = pos.y - qy, d2 = ox * ox + oy * oy;
+      if (d2 >= r * r) continue;
+      if (d2 > 1e-10) { const d = Math.sqrt(d2); pos.x += ox / d * (r - d); pos.y += oy / d * (r - d); }
+      else {
+        const l = pos.x - tx, rr = tx + 1 - pos.x, b = pos.y - ty, t = ty + 1 - pos.y;
+        const m = Math.min(l, rr, b, t);
+        if (m === l) pos.x = tx - r; else if (m === rr) pos.x = tx + 1 + r; else if (m === b) pos.y = ty - r; else pos.y = ty + 1 + r;
+      }
+    }
+    rayId = rayId >= 0x3ffffff0 ? 1 : rayId + 1;
+    const rid = rayId;
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+      if (tx < 0 || ty < 0 || tx >= W || ty >= D) continue;
+      const c = ty * W + tx;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let e = pass === 0 ? headS[c] : headD[c]; e >= 0; e = lNext[e]) {
+          const p = lPrim[e];
+          if (pMail[p] === rid) continue;
+          pMail[p] = rid;
+          if (!(pFlag[p] & PF_COLLIDE) || pBot[p] > 1.7 || pTop[p] < 0.12) continue;
+          pushOutPrim(p, pos, r);
+        }
+      }
+    }
+  }
+}
+
+// =====================================================================
+// 8. RAYCASTING / VISIBILITY
+//    2D DDA over the column grid. Inside each column the ray's height
+//    interval is tested against the column's occupancy mask, which gives
+//    exact side, floor and ceiling hits for stacked voxels. Primitives in
+//    the current tile are tested with mailboxing. Traversal stops at the
+//    first tile whose exit distance is beyond the nearest hit.
+// =====================================================================
+const K_NONE = 0, K_VOX = 1, K_GROUND = 2, K_PRIM = 3, K_OUT = 4;
+// hot per-ray results live in objects with double fields, so writes do not allocate
+const HIT = { t: 0.5, kind: 0, nx: 0.5, ny: 0.5, nz: 0.5, mat: 0, tile: 0, prev: -1, prim: -1, u: 0.5, v: 0.5, w: 0.5, face: 0 };
+const I = { nx: 0.5, ny: 0.5, nz: 0.5, u: 0.5, v: 0.5, w: 0.5, face: 0 };
+let rayId = 1;
+
+function isectBox(p, ox, oy, oz, dx, dy, dz) {
+  const c = pC[p], s = pS[p];
+  const px = ox - pX[p], py = oy - pY[p], pz = oz - pZ[p];
+  const lx = px * c + py * s, ly = -px * s + py * c;
+  const ldx = dx * c + dy * s, ldy = -dx * s + dy * c;
+  const hx = pHX[p], hy = pHY[p], hz = pHZ[p];
+  let tn = -1e30, tf = 1e30, face = -1, t1, t2;
+  if (ldx > 1e-9 || ldx < -1e-9) {
+    const inv = 1 / ldx;
+    if (inv > 0) { t1 = (-hx - lx) * inv; t2 = (hx - lx) * inv; if (t1 > tn) { tn = t1; face = 1; } }
+    else { t1 = (hx - lx) * inv; t2 = (-hx - lx) * inv; if (t1 > tn) { tn = t1; face = 0; } }
+    if (t2 < tf) tf = t2;
+  } else if (lx < -hx || lx > hx) return -1;
+  if (ldy > 1e-9 || ldy < -1e-9) {
+    const inv = 1 / ldy;
+    if (inv > 0) { t1 = (-hy - ly) * inv; t2 = (hy - ly) * inv; if (t1 > tn) { tn = t1; face = 3; } }
+    else { t1 = (hy - ly) * inv; t2 = (-hy - ly) * inv; if (t1 > tn) { tn = t1; face = 2; } }
+    if (t2 < tf) tf = t2;
+  } else if (ly < -hy || ly > hy) return -1;
+  if (dz > 1e-9 || dz < -1e-9) {
+    const inv = 1 / dz;
+    if (inv > 0) { t1 = (-hz - pz) * inv; t2 = (hz - pz) * inv; if (t1 > tn) { tn = t1; face = 5; } }
+    else { t1 = (hz - pz) * inv; t2 = (-hz - pz) * inv; if (t1 > tn) { tn = t1; face = 4; } }
+    if (t2 < tf) tf = t2;
+  } else if (pz < -hz || pz > hz) return -1;
+  if (tn > tf || tn < 1e-4) return -1;
+  I.face = face;
+  I.u = lx + ldx * tn; I.v = ly + ldy * tn; I.w = pz + dz * tn;
+  let nlx = 0, nly = 0; I.nz = 0;
+  if (face === 0) nlx = 1; else if (face === 1) nlx = -1; else if (face === 2) nly = 1; else if (face === 3) nly = -1; else if (face === 4) I.nz = 1; else I.nz = -1;
+  I.nx = nlx * c - nly * s; I.ny = nlx * s + nly * c;
+  return tn;
+}
+function isectCyl(p, ox, oy, oz, dx, dy, dz) {
+  const px = ox - pX[p], py = oy - pY[p], pz = oz - pZ[p];
+  const r = pHX[p], hz = pHZ[p];
+  let best = 1e30;
+  const a = dx * dx + dy * dy;
+  if (a > 1e-12) {
+    const b = px * dx + py * dy, cc = px * px + py * py - r * r;
+    const disc = b * b - a * cc;
+    if (disc < 0) return -1;
+    const t = (-b - Math.sqrt(disc)) / a;
+    if (t > 1e-4) {
+      const z = pz + dz * t;
+      if (z >= -hz && z <= hz) { best = t; I.face = 6; I.nx = (px + dx * t) / r; I.ny = (py + dy * t) / r; I.nz = 0; }
+    }
+  } else if (px * px + py * py > r * r) return -1;
+  if (dz > 1e-9 || dz < -1e-9) {
+    const zc = dz < 0 ? hz : -hz;
+    const t = (zc - pz) / dz;
+    if (t > 1e-4 && t < best) {
+      const x = px + dx * t, y = py + dy * t;
+      if (x * x + y * y <= r * r) { best = t; I.face = dz < 0 ? 4 : 5; I.nx = 0; I.ny = 0; I.nz = dz < 0 ? 1 : -1; }
+    }
+  }
+  if (best === 1e30) return -1;
+  I.u = px + dx * best; I.v = py + dy * best; I.w = pz + dz * best;
+  return best;
+}
+function isectSph(p, ox, oy, oz, dx, dy, dz) {
+  const px = ox - pX[p], py = oy - pY[p], pz = oz - pZ[p];
+  const r = pHX[p];
+  const b = px * dx + py * dy + pz * dz, c = px * px + py * py + pz * pz - r * r;
+  const disc = b * b - c;
+  if (disc < 0) return -1;
+  const t = -b - Math.sqrt(disc);
+  if (t < 1e-4) return -1;
+  I.u = px + dx * t; I.v = py + dy * t; I.w = pz + dz * t;
+  I.nx = I.u / r; I.ny = I.v / r; I.nz = I.w / r; I.face = 7;
+  return t;
+}
+
+function castRay(ox, oy, oz, dx, dy, dz, maxT) {
+  rayId = rayId >= 0x3ffffff0 ? 1 : rayId + 1;
+  const rid = rayId;
+  let mx = Math.floor(ox), my = Math.floor(oy);
+  const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1;
+  const adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+  const tdx = adx > 1e-9 ? 1 / adx : 1e30, tdy = ady > 1e-9 ? 1 / ady : 1e30;
+  let tmx = adx > 1e-9 ? (dx > 0 ? mx + 1 - ox : ox - mx) * tdx : 1e30;
+  let tmy = ady > 1e-9 ? (dy > 0 ? my + 1 - oy : oy - my) * tdy : 1e30;
+  const tGround = dz < -1e-7 ? -oz / dz : 1e30;
+  let best = maxT, kind = K_NONE;
+  if (tGround < best) { best = tGround; kind = K_GROUND; }
+  const invDz = dz !== 0 ? 1 / dz : 0;
+  let tEnter = 0, axis = -1, prev = -1;
+  for (;;) {
+    if (mx < 0 || my < 0 || mx >= W || my >= D) {
+      if (best > tEnter) { kind = K_OUT; best = tEnter; }
+      break;
+    }
+    const c = my * W + mx;
+    const tExit = tmx < tmy ? tmx : tmy;
+    if (dz >= 0) {
+      // climbing ray above everything in this 8 x 8 chunk: jump to the chunk exit
+      const ck = (my >> 3) * (W >> 3) + (mx >> 3);
+      const ztop = chunkTopS[ck] > chunkTopD[ck] ? chunkTopS[ck] : chunkTopD[ck];
+      if (oz + dz * tEnter >= ztop) {
+        const bx = dx > 0 ? ((mx >> 3) + 1) << 3 : (mx >> 3) << 3;
+        const by = dy > 0 ? ((my >> 3) + 1) << 3 : (my >> 3) << 3;
+        const tcx = adx > 1e-9 ? (bx - ox) / dx : 1e30, tcy = ady > 1e-9 ? (by - oy) / dy : 1e30;
+        const tc = tcx < tcy ? tcx : tcy;
+        if (tc >= best || oz + dz * tc > worldTop) break;
+        if (tcx < tcy) { mx = dx > 0 ? bx : bx - 1; axis = 0; my = Math.floor(oy + dy * tc); }
+        else { my = dy > 0 ? by : by - 1; axis = 1; mx = Math.floor(ox + dx * tc); }
+        tmx = adx > 1e-9 ? ((dx > 0 ? mx + 1 : mx) - ox) / dx : 1e30;
+        tmy = ady > 1e-9 ? ((dy > 0 ? my + 1 : my) - oy) / dy : 1e30;
+        tEnter = tc; prev = -1;
+        continue;
+      }
+    }
+    if (colTop[c] === 0 && headS[c] < 0 && headD[c] < 0) {
+      if (best <= tExit) break;
+      prev = c;
+      if (tmx < tmy) { mx += sx; tEnter = tmx; tmx += tdx; axis = 0; }
+      else { my += sy; tEnter = tmy; tmy += tdy; axis = 1; }
+      if (tEnter >= best) break;
+      continue;
+    }
+    const tEnd = tExit < best ? tExit : best;
+    const z0 = oz + dz * tEnter, z1 = oz + dz * tEnd;
+    const top = colTop[c];
+    if (top > 0 && (z0 < top || z1 < top)) {
+      const l0 = z0 < 0 ? 0 : (z0 | 0);
+      let hitT = -1, lvl = 0, nzv = 0;
+      if (axis >= 0 && z0 >= 0 && l0 < top && ((l0 < 32 ? (colLo[c] >>> l0) : (colHi[c] >>> (l0 - 32))) & 1)) {
+        hitT = tEnter; lvl = l0;
+      } else if (dz > 0) {
+        let l1 = z1 | 0; if (l1 > top - 1) l1 = top - 1;
+        if (l1 > l0) { const k = firstUp(c, l0 + 1, l1); if (k >= 0) { hitT = (k - oz) * invDz; lvl = k; nzv = -1; } }
+      } else if (dz < 0) {
+        let la = l0 - 1; if (la > top - 1) la = top - 1;
+        const lb = z1 < 0 ? 0 : (z1 | 0);
+        if (la >= lb) { const k = firstDown(c, la, lb); if (k >= 0) { hitT = (k + 1 - oz) * invDz; lvl = k; nzv = 1; } }
+      }
+      if (hitT >= 0 && hitT < best) {
+        best = hitT; kind = K_VOX; HIT.tile = c; HIT.prev = prev; HIT.mat = vox[c * H + lvl];
+        if (nzv === 0) { if (axis === 0) { HIT.nx = -sx; HIT.ny = 0; } else { HIT.nx = 0; HIT.ny = -sy; } HIT.nz = 0; }
+        else { HIT.nx = 0; HIT.ny = 0; HIT.nz = nzv; }
+      }
+    }
+    const zlo = z0 < z1 ? z0 : z1, zhi = z0 < z1 ? z1 : z0;
+    for (let pass = 0; pass < 2; pass++) {
+      let e;
+      if (pass === 0) { e = headS[c]; if (zlo > topS[c]) e = -1; }
+      else { e = headD[c]; if (zlo > topD[c]) e = -1; }
+      for (; e >= 0; e = lNext[e]) {
+        const p = lPrim[e];
+        if (pMail[p] === rid) continue;
+        if (zlo > pTop[p] || zhi < pBot[p]) continue;
+        pMail[p] = rid;
+        const ty = pType[p];
+        const t = ty === P_BOX ? isectBox(p, ox, oy, oz, dx, dy, dz) : ty === P_CYL ? isectCyl(p, ox, oy, oz, dx, dy, dz) : isectSph(p, ox, oy, oz, dx, dy, dz);
+        if (t > 0 && t < best) {
+          best = t; kind = K_PRIM; HIT.prim = p; HIT.tile = c;
+          HIT.nx = I.nx; HIT.ny = I.ny; HIT.nz = I.nz; HIT.u = I.u; HIT.v = I.v; HIT.w = I.w; HIT.face = I.face;
+        }
+      }
+    }
+    if (best <= tExit) break;
+    if (dz >= 0 && oz + dz * tExit > worldTop) break;
+    prev = c;
+    if (tmx < tmy) { mx += sx; tEnter = tmx; tmx += tdx; axis = 0; }
+    else { my += sy; tEnter = tmy; tmy += tdy; axis = 1; }
+    if (tEnter >= best) break;
+  }
+  HIT.t = best; HIT.kind = kind;
+  if (kind === K_GROUND) { HIT.nx = 0; HIT.ny = 0; HIT.nz = 1; }
+  return kind;
+}
+
+// =====================================================================
+// 9. LIGHTING
+//    Ambient term that grows with height, wrapped diffuse from nearby
+//    point lights (8 m chunk buckets), Blinn specular on glossy and wet
+//    surfaces, and emission for neon, windows and lamps.
+// =====================================================================
+const LA = { r: 0.5, g: 0.5, b: 0.5, sr: 0.5, sg: 0.5, sb: 0.5 };
+function gatherLight(px, py, pz, nx, ny, nz, indoor, spec, vx, vy, vz) {
+  let r = 0, g = 0, b = 0, sr = 0, sg = 0, sb = 0;
+  {
+    let cx = px | 0, cy = py | 0;
+    if (cx < 0) cx = 0; else if (cx >= W) cx = W - 1;
+    if (cy < 0) cy = 0; else if (cy >= D) cy = D - 1;
+    const k = cy * W + cx;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let e = pass === 0 ? cHeadS[k] : cHeadD[k]; e >= 0; e = cNext[e]) {
+        const L = cLight[e];
+        if (lIn[L] !== indoor) continue;
+        const ex = lX[L] - px, ey = lY[L] - py, ez = lZ[L] - pz;
+        const d2 = ex * ex + ey * ey + ez * ez;
+        const r2 = lR2[L];
+        if (d2 >= r2) continue;
+        const inv = 1 / Math.sqrt(d2 + 1e-3);
+        const ndl = (ex * nx + ey * ny + ez * nz) * inv;
+        if (ndl <= -0.2) continue;
+        const a = 1 - d2 / r2;
+        const att = a * a * (0.35 + 0.65 / (1 + 0.12 * d2));
+        const f = att * (ndl + 0.2) * 0.8333;
+        r += lEr[L] * f; g += lEg[L] * f; b += lEb[L] * f;
+        if (spec > 0 && ndl > 0) {
+          const hx = ex * inv + vx, hy = ey * inv + vy, hz = ez * inv + vz;
+          let nh = (hx * nx + hy * ny + hz * nz) / Math.sqrt(hx * hx + hy * hy + hz * hz + 1e-9);
+          if (nh > 0) {
+            nh *= nh; nh *= nh; nh *= nh; nh *= nh; nh *= nh;
+            const sp = nh * spec * att * 1.6;
+            sr += lEr[L] * sp; sg += lEg[L] * sp; sb += lEb[L] * sp;
+          }
+        }
+      }
+    }
+  }
+  LA.r = r; LA.g = g; LA.b = b; LA.sr = sr; LA.sg = sg; LA.sb = sb;
+}
+function updateLights() {
+  for (let L = 0; L < nLightS; L++) {
+    let k = 1;
+    switch (lFlk[L]) {
+      case 1: { const q = hash3(L, (time * 14) | 0, 1); k = q > 0.92 ? 0.1 : 0.85 + 0.15 * Math.sin(time * 90 + L); break; }
+      case 2: k = 0.72 + 0.28 * Math.sin(time * 2.1 + L); break;
+      case 3: k = signs[lPh[L] | 0].lvl; break;
+      case 4: k = bills[lPh[L] | 0].lvl; break;
+      case 5: {
+        const st = sigState(APPR_GROUP[lPh[L] | 0]);
+        const C = TLC[st === 0 ? 0 : st === 1 ? 1 : 2];
+        lEr[L] = C[0] * 0.9; lEg[L] = C[1] * 0.9; lEb[L] = C[2] * 0.9;
+        continue;
+      }
+    }
+    lEr[L] = lBr[L] * k; lEg[L] = lBg[L] * k; lEb[L] = lBb[L] * k;
+  }
+}
+function updateSigns() {
+  for (const s of signs) {
+    let lvl = 1;
+    const k = hash3(s.idx, (time * 24) | 0, 7);
+    switch (s.mode) {
+      case 0: if (k > 0.985) lvl = 0.25; break;
+      case 1: lvl = 0.78 + 0.22 * Math.sin(time * 3 + s.ph); break;
+      case 2: {
+        const n = s.text.length, t = (time * 1.6 + s.ph) % (n + 4);
+        s.seq = t | 0;
+        lvl = t > n + 1.5 ? (((t * 6) | 0) & 1 ? 1 : 0.2) : 1;
+        break;
+      }
+      case 3: if (k > 0.9) lvl = 0.12; break;
+    }
+    s.lvl = lvl;
+    if (s.mode !== 2) s.seq = 99;
+    s.dead = hash3(s.idx, (time * 9) | 0, 3) > 0.55 ? s.deadLetter : -1;
+  }
+  for (const b of bills) b.lvl = hash3(b.idx, (time * 10) | 0, 17) > 0.992 ? 0.2 : 0.88 + 0.12 * Math.sin(time * 1.7 + b.ph);
+}
+
+// =====================================================================
+// 10. ASCII RENDERING
+//    Every character cell casts one ray. The hit is shaded, fogged and
+//    tone mapped; luminance picks a glyph from a coverage sorted ramp,
+//    and the hue picks the glyph color. An edge pass replaces cells on
+//    depth or surface discontinuities with line glyphs. Glyphs are
+//    rasterized once into sparse pixel lists and stamped into an
+//    ImageData buffer.
+// =====================================================================
+const canvas = document.getElementById('screen');
+// the final glyph stamping runs on WebGL when available, else on a 2D ImageData path
+let gl = null, ctx = null;
+if (!QS.has('nogl')) { try { gl = canvas.getContext('webgl', { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: false, failIfMajorPerformanceCaveat: !QS.has('forcegl') }); } catch (err) { gl = null; } }
+if (!gl) ctx = canvas.getContext('2d', { alpha: false });
+let glProg = null, glCellTex = null, glAtlasTex = null, cellData = null, glU = {};
+const glowCanvas = document.getElementById('glow');
+const gctx = glowCanvas.getContext('2d');
+let cols = 0, rows = 0, cw = 8, chh = 14, NC = 0, viewW = 1280, viewH = 720;
+let depthA, sidA, glyphA, colRA, colGA, colBA, emisA, fogA;
+let uArr, vArr, img = null, buf32 = null, gImg = null, gBuf32 = null, glyphCov = null;
+let glyphStart, glyphLen, glyphOff, glyphAl;
+const gIndex = {};
+let rampG = null, RAMP_MAX = 1;
+let G_PIPE = 0, G_DASH = 0, G_UNDER = 0, G_SLASH = 0, G_BSLASH = 0, G_COMMA = 0, G_QUOTE = 0, G_DOT = 0;
+const INK_R = CFG.ink[0], INK_G = CFG.ink[1], INK_B = CFG.ink[2];
+const FOG_R = CFG.fog[0], FOG_G = CFG.fog[1], FOG_B = CFG.fog[2], INV_FOG = 1 / CFG.fogDist;
+
+function resize() {
+  viewW = Math.max(320, window.innerWidth || 1280);
+  viewH = Math.max(200, window.innerHeight || 720);
+  rows = CFG.rowPresets[CFG.quality];
+  chh = Math.max(7, Math.min(CFG.maxCellPx, Math.floor(viewH / rows)));
+  cw = Math.max(4, Math.round(chh * CFG.cellAspect));
+  const dispCellW = (viewH / rows) * CFG.cellAspect;
+  cols = Math.max(60, Math.min(340, Math.round(viewW / dispCellW)));
+  canvas.width = cols * cw; canvas.height = rows * chh;
+  // glow: one pixel per cell, scaled up and blurred by CSS (no readback of the main canvas)
+  glowCanvas.width = cols; glowCanvas.height = rows;
+  gImg = gctx.createImageData(cols, rows); gBuf32 = new Uint32Array(gImg.data.buffer);
+  NC = cols * rows;
+  depthA = new Float32Array(NC); sidA = new Int32Array(NC); glyphA = new Uint8Array(NC);
+  colRA = new Uint8Array(NC); colGA = new Uint8Array(NC); colBA = new Uint8Array(NC);
+  emisA = new Uint8Array(NC); fogA = new Float32Array(NC);
+  if (ctx) { img = ctx.createImageData(canvas.width, canvas.height); buf32 = new Uint32Array(img.data.buffer); }
+  cellData = new Uint8Array(NC * 4);
+  uArr = new Float32Array(cols); vArr = new Float32Array(rows);
+  for (let c = 0; c < cols; c++) uArr[c] = ((c + 0.5) / cols) * 2 - 1;
+  for (let r = 0; r < rows; r++) vArr[r] = ((r + 0.5) / rows) * 2 - 1;
+  buildGlyphs();
+}
+
+function buildGlyphs() {
+  const chars = [' '];
+  for (const ch of CFG.ramp + '|-_/\\,\'.+') if (!chars.includes(ch)) chars.push(ch);
+  const oc = document.createElement('canvas'); oc.width = cw; oc.height = chh;
+  const o = oc.getContext('2d', { willReadFrequently: true });
+  let fs = Math.max(6, Math.round(chh * 0.95));
+  o.font = `bold ${fs}px ${CFG.font}`;
+  const mw = o.measureText('M').width || cw;
+  if (mw > cw * 1.04) { fs = Math.max(5, Math.floor(fs * cw * 1.04 / mw)); o.font = `bold ${fs}px ${CFG.font}`; }
+  o.textAlign = 'center'; o.textBaseline = 'middle'; o.fillStyle = '#fff';
+  const offs = [], als = [], cover = [];
+  glyphStart = new Int32Array(chars.length); glyphLen = new Int32Array(chars.length);
+  const W2 = canvas.width;
+  chars.forEach((chr, g) => {
+    o.clearRect(0, 0, cw, chh);
+    o.fillText(chr, cw / 2, chh / 2 + chh * 0.05);
+    const d = o.getImageData(0, 0, cw, chh).data;
+    glyphStart[g] = offs.length;
+    let sum = 0;
+    for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) {
+      const a = d[(y * cw + x) * 4 + 3];
+      if (a > 20) { offs.push(y * W2 + x); als.push(a); sum += a; }
+    }
+    glyphLen[g] = offs.length - glyphStart[g];
+    cover[g] = chr === ' ' ? -1 : sum;
+    gIndex[chr] = g;
+  });
+  glyphOff = Int32Array.from(offs); glyphAl = Uint16Array.from(als);
+  const maxCov = Math.max(1, ...cover);
+  glyphCov = Float32Array.from(cover, v => Math.max(0, v) / maxCov);
+  const rc = Array.from(CFG.ramp).map(ch => gIndex[ch]);
+  rc.sort((a, b) => cover[a] - cover[b]);
+  rampG = Uint8Array.from(rc); RAMP_MAX = rampG.length - 1;
+  if (gl) setupGL(oc, o, chars);
+  G_PIPE = gIndex['|']; G_DASH = gIndex['-']; G_UNDER = gIndex['_']; G_SLASH = gIndex['/']; G_BSLASH = gIndex['\\'];
+  G_COMMA = gIndex[',']; G_QUOTE = gIndex['\'']; G_DOT = gIndex['.'];
+}
+
+// ---------- surface shading ----------
+const S = { ar: 0.5, ag: 0.5, ab: 0.5, er: 0.5, eg: 0.5, eb: 0.5, k: 0.5, ind: 0, id: 0, tex: 0.5 };
+
+function shadeVoxel(px, py, pz, nx, ny, nz) {
+  const c = HIT.tile, m = HIT.mat;
+  const from = nz === 0 ? (HIT.prev >= 0 ? HIT.prev : c) : c;
+  const inside = (tflag[from] & F_INDOOR) !== 0;
+  S.ind = inside ? 1 : 0;
+  const fc = nx > 0 ? 0 : nx < 0 ? 1 : ny > 0 ? 2 : ny < 0 ? 3 : nz > 0 ? 4 : 5;
+  const bi = bldOf[c];
+  S.id = ((bi + 2) << 3) | fc;
+  if (inside || m === V_WALLIN) {
+    S.id = (1 << 20) | fc;
+    let a = 0.5 + 0.08 * S.tex;
+    if (nz < 0) { const gx = px - Math.floor(px), gy = py - Math.floor(py); a = (gx < 0.05 || gy < 0.05) ? 0.25 : 0.42; }
+    else if (pz < 0.12) a = 0.2;
+    else if (pz > 1.0 && pz < 1.06) a = 0.3;
+    S.ar = a * 1.05; S.ag = a * 0.95; S.ab = a * 0.85; S.ind = 1;
+    return;
+  }
+  if (gmat[from] === G_TUNNEL) {
+    const a = 0.16 + 0.06 * S.tex;
+    S.ar = S.ag = S.ab = a;
+    const ns = py < PERIM || py >= D - PERIM;
+    const along = ns ? py : px, across = ns ? px : py, mid = ns ? 64 : 63;
+    if (nz < 0) { if (Math.abs(across - mid) < 0.35 && along - Math.floor(along / 3) * 3 < 1.8) { S.er = 1.4; S.eg = 0.7; S.eb = 0.25; } }
+    else if (pz > 5.2 && pz < 5.45 && along - Math.floor(along / 2) * 2 < 1.4) { S.er = 1.0; S.eg = 0.45; S.eb = 0.12; }
+    return;
+  }
+  if (m === V_ROOFBOX) { const a = ((pz * 5) | 0) & 1 ? 0.22 : 0.32; S.ar = S.ag = S.ab = a; S.k = 0.2; return; }
+  if (nz > 0) { const a = 0.13 + 0.08 * hash3((px * 2) | 0, (py * 2) | 0, 3); S.ar = a; S.ag = a; S.ab = a * 1.1; return; }
+  if (nz < 0) {
+    S.ar = S.ag = S.ab = 0.16;
+    const gx = px / 2, gy = py / 2;
+    if (Math.abs(gx - Math.floor(gx) - 0.5) < 0.12 && Math.abs(gy - Math.floor(gy) - 0.5) < 0.12 && hash3(gx | 0, gy | 0, 11) > 0.35) { S.er = 1.3; S.eg = 1.0; S.eb = 0.7; }
+    return;
+  }
+  facade(bi, px, py, pz, nx, fc, from);
+}
+
+function facade(bi, px, py, pz, nx, fc, from) {
+  const b = buildings[bi];
+  if (!b) { S.ar = S.ag = S.ab = 0.3; return; }
+  const u = nx !== 0 ? py : px;
+  const fl = Math.floor(pz / b.floorH), lz = pz - fl * b.floorH;
+  const base = 0.56;
+  S.ar = b.tr * base; S.ag = b.tg * base; S.ab = b.tb * base; S.k = 0.12;
+  if (lz < 0.14) { S.ar *= 1.5; S.ag *= 1.5; S.ab *= 1.5; }
+  const g = gmat[from];
+  const street = g === G_WALK || g === G_ROAD;
+  if (fl === 0 && (street || g === G_ALLEY) && !b.perim && b.style !== ST_GLASS && !b.shop) {
+    const sp = 3.5, si = Math.floor(u / sp), su = u - si * sp;
+    if (lz > 0.25 && lz < 2.55 && su > 0.3 && su < sp - 0.3) {
+      const hs = hash3(bi, si, fc + 40);
+      if (hs < (street ? 0.72 : 0.12)) {
+        const pal = WINPAL[hs < 0.3 ? 3 : 0];
+        const col = pal[((hs * 97) | 0) % pal.length];
+        let k = 0.8 + 0.7 * hash3(si, bi, 41);
+        if ((((lz * 4) | 0) & 1) === 1) k *= 0.7;
+        S.er = col[0] * k; S.eg = col[1] * k; S.eb = col[2] * k;
+        S.ar = S.ag = S.ab = 0.04; S.k = 0.8;
+      } else {
+        const a = (lz * 7) - Math.floor(lz * 7) < 0.45 ? 0.12 : 0.24;
+        S.ar = S.ag = S.ab = a; S.k = 0.3;
+      }
+    }
+    return;
+  }
+  const wi = Math.floor(u / b.pitch), lu = u - wi * b.pitch;
+  const inset = (b.pitch - b.winW) * 0.5;
+  if (lu > inset && lu < inset + b.winW && lz > b.wz0 && lz < b.wz1) {
+    if (lu - inset < 0.07 || inset + b.winW - lu < 0.07 || lz - b.wz0 < 0.07 || b.wz1 - lz < 0.07) { S.ar *= 0.7; S.ag *= 0.7; S.ab *= 0.7; return; }
+    const h1 = hash3(bi * 17 + fc, fl, wi);
+    if (h1 < b.lit) {
+      const h2 = hash3(wi, fl * 3 + fc, bi);
+      const pal = WINPAL[b.pal], col = pal[(h2 * pal.length) | 0];
+      let k = 0.45 + 0.75 * hash3(fl, wi, bi + 5);
+      if (h2 > 0.93) k *= 0.5 + 0.5 * hash3(bi, (time * 7) | 0, wi);
+      if (h1 < b.lit * 0.4 && ((((lz - b.wz0) * 7) | 0) & 1)) k *= 0.55;
+      S.er = col[0] * k; S.eg = col[1] * k; S.eb = col[2] * k;
+      S.ar = S.ag = S.ab = 0.03;
+    } else { S.ar = S.ag = S.ab = 0.035; S.k = 0.9; }
+  }
+}
+
+function roadPaint(px, py, fl) {
+  if (fl & F_CROSS) {
+    if ((py >= 54 && py < 58) || (py >= 68 && py < 72)) {
+      const yy = py < 60 ? py - 54 : py - 68;
+      return yy > 0.35 && yy < 3.65 && (px - Math.floor(px)) < 0.5 ? 1 : 0;
+    }
+    const xx = px < 60 ? px - 54 : px - 70;
+    return xx > 0.35 && xx < 3.65 && (py - Math.floor(py)) < 0.5 ? 1 : 0;
+  }
+  const inAv = px >= 58 && px < 70, inSt = py >= 58 && py < 68;
+  if (inAv && inSt) return 0;
+  if (inAv) {
+    if (Math.abs(px - 63.85) < 0.07 || Math.abs(px - 64.15) < 0.07) return 2;
+    if ((Math.abs(px - 60.5) < 0.07 || Math.abs(px - 67.5) < 0.07) && (py / 3) % 1 < 0.5) return 1;
+    if (py >= 53.0 && py < 53.4 && px >= 64 && px < 67.5) return 1;
+    if (py >= 72.6 && py < 73.0 && px >= 60.5 && px < 64) return 1;
+    return 0;
+  }
+  if (inSt) {
+    if (Math.abs(py - 63) < 0.08 && (px / 4) % 1 < 0.55) return 1;
+    if ((Math.abs(py - 60) < 0.07 || Math.abs(py - 66) < 0.07) && (px / 3) % 1 < 0.5) return 1;
+    if (px >= 53.0 && px < 53.4 && py >= 60 && py < 63) return 1;
+    if (px >= 74.6 && px < 75.0 && py >= 63 && py < 66) return 1;
+  }
+  return 0;
+}
+
+function shadeGround(px, py) {
+  let tx = px | 0, ty = py | 0;
+  if (tx < 0) tx = 0; else if (tx >= W) tx = W - 1;
+  if (ty < 0) ty = 0; else if (ty >= D) ty = D - 1;
+  const c = ty * W + tx, g = gmat[c];
+  S.ind = (tflag[c] & F_INDOOR) ? 1 : 0;
+  S.id = 1;
+  switch (g) {
+    case G_ROAD: case G_TUNNEL: {
+      let a = 0.07 + 0.035 * S.tex; S.k = 0.9;
+      if (hash3((px * 0.5) | 0, (py * 0.5) | 0, 9) > 0.7) { a *= 0.7; S.k = 1.3; }
+      const paint = roadPaint(px, py, tflag[c]);
+      if (paint === 1) { S.ar = S.ag = S.ab = 0.5; S.k = 0.35; }
+      else if (paint === 2) { S.ar = 0.55; S.ag = 0.4; S.ab = 0.12; S.k = 0.35; }
+      else { S.ar = a; S.ag = a; S.ab = a * 1.1; }
+      break;
+    }
+    case G_WALK: {
+      const sx = px / 1.5, sy = py / 1.5;
+      let a = 0.16 + 0.03 * hash3(Math.floor(sx), Math.floor(sy), 2);
+      if (sx - Math.floor(sx) < 0.05 || sy - Math.floor(sy) < 0.05) a = 0.08;
+      const inAv = px >= 58 && px < 70, inSt = py >= 58 && py < 68;
+      if ((Math.min(Math.abs(px - 58), Math.abs(px - 70)) < 0.2 && !inSt) || (Math.min(Math.abs(py - 58), Math.abs(py - 68)) < 0.2 && !inAv)) a = 0.36;
+      S.ar = a; S.ag = a; S.ab = a * 1.05; S.k = 0.12;
+      break;
+    }
+    case G_ALLEY: {
+      const a = 0.055 + 0.045 * S.tex;
+      S.ar = a * 0.9; S.ag = a; S.ab = a * 0.95;
+      S.k = hash3((px * 0.7) | 0, (py * 0.7) | 0, 19) > 0.55 ? 1.1 : 0.2;
+      break;
+    }
+    case G_FLOOR: {
+      const a = ((Math.floor(px) + Math.floor(py)) & 1) ? 0.24 : 0.12;
+      S.ar = a * 1.05; S.ag = a * 0.95; S.ab = a * 0.9; S.k = 0.3; S.ind = 1;
+      break;
+    }
+    default: S.ar = S.ag = S.ab = 0.08;
+  }
+}
+
+function shadeSign(p, S, f, u, w) {
+  if (f !== 2 && f !== 3) { S.ar = S.ag = S.ab = 0.12; S.k = 0.4; return; }
+  const hx = pHX[p], hz = pHZ[p];
+  const u01 = f === 2 ? (hx - u) / (2 * hx) : (u + hx) / (2 * hx);
+  const v01 = (hz - w) / (2 * hz);
+  const n = S.text.length;
+  let px = 0, li = 0;
+  if (!S.vertical) {
+    const gw = n * 4 + 1, gh = 7;
+    const gx = Math.min(gw - 1, (u01 * gw) | 0), gy = Math.min(gh - 1, (v01 * gh) | 0);
+    if (gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1) px = 2;
+    else { li = ((gx - 1) / 4) | 0; const col = (gx - 1) % 4, row = gy - 1; if (col < 3 && row < 5 && fontBit(S.text.charCodeAt(li), row, col)) px = 1; }
+  } else {
+    const gw = 5, gh = n * 6 + 1;
+    const gx = Math.min(gw - 1, (u01 * gw) | 0), gy = Math.min(gh - 1, (v01 * gh) | 0);
+    if (gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1) px = 2;
+    else { li = ((gy - 1) / 6) | 0; const row = (gy - 1) % 6, col = gx - 1; if (row < 5 && col < 3 && fontBit(S.text.charCodeAt(li), row, col)) px = 1; }
+  }
+  const c = S.col;
+  S.ar = S.ag = S.ab = 0.05;
+  if (px === 1) {
+    let on = S.lvl;
+    if (li > S.seq) on = 0.06;
+    if (li === S.dead) on *= 0.12;
+    S.er = c[0] * 2.4 * on; S.eg = c[1] * 2.4 * on; S.eb = c[2] * 2.4 * on;
+  } else if (px === 2) {
+    const k = 0.9 * S.lvl;
+    S.er = S.c2[0] * k; S.eg = S.c2[1] * k; S.eb = S.c2[2] * k;
+  } else { S.er = c[0] * 0.06; S.eg = c[1] * 0.06; S.eb = c[2] * 0.06; }
+}
+
+function shadeBill(p, B, f, u, w) {
+  if (f !== 2) { S.ar = S.ag = S.ab = 0.08; return; }
+  const hx = pHX[p], hz = pHZ[p];
+  const uu = hx - u, vv = hz - w;
+  const lvl = B.lvl;
+  S.ar = S.ag = S.ab = 0.03;
+  if (uu < 0.12 || vv < 0.12 || uu > 2 * hx - 0.12 || vv > 2 * hz - 0.12) { S.er = B.c2[0] * 0.7 * lvl; S.eg = B.c2[1] * 0.7 * lvl; S.eb = B.c2[2] * 0.7 * lvl; return; }
+  let k1 = 0, k2 = 0;
+  if (B.mode === 0) {
+    const cell = B.cell, total = B.text.length * 4;
+    const gx = Math.floor(uu / cell + time * 6 + B.ph * 10);
+    const gxm = ((gx % total) + total) % total;
+    const rowsN = Math.floor(2 * hz / cell), top = (rowsN - 5) >> 1;
+    const gy = Math.floor(vv / cell) - top;
+    let on = false;
+    if (gy >= 0 && gy < 5) { const li = (gxm / 4) | 0, col = gxm % 4; if (col < 3) on = fontBit(B.text.charCodeAt(li), gy, col) === 1; }
+    if (on) k1 = 2.4; else k2 = ((Math.floor(vv / cell) + Math.floor(time * 4)) % 5 === 0) ? 0.25 : 0.05;
+  } else if (B.mode === 1) {
+    const dx = uu - hx, dy = vv - hz, r = Math.sqrt(dx * dx + dy * dy);
+    if (r < 0.45) { S.er = S.eg = S.eb = 2.2 * lvl; return; }
+    const ph = r * 1.1 - time * 1.3, band = ph - Math.floor(ph);
+    if (band < 0.3) k1 = 1.8; else if (band < 0.45) k2 = 0.6; else k2 = 0.05;
+  } else {
+    const bw = 0.45, bar = Math.floor(uu / bw), within = uu / bw - bar;
+    if (within > 0.8) k2 = 0.02;
+    else {
+      const hgt = (0.3 + 0.7 * Math.abs(Math.sin(time * (1.3 + hash3(bar, 0, B.idx) * 2) + bar))) * 2 * hz;
+      const y = 2 * hz - vv;
+      if (y < hgt) { const t = y / (2 * hz); k1 = 1.9 * t; k2 = 1.9 * (1 - t); } else k2 = 0.04;
+    }
+  }
+  S.er = (B.c1[0] * k1 + B.c2[0] * k2) * lvl; S.eg = (B.c1[1] * k1 + B.c2[1] * k2) * lvl; S.eb = (B.c1[2] * k1 + B.c2[2] * k2) * lvl;
+}
+
+function shadePrim(px, py, pz) {
+  const p = HIT.prim, m = pMat[p], id = pId[p], f = HIT.face, u = HIT.u, v = HIT.v, w = HIT.w;
+  let tx = px | 0, ty = py | 0;
+  if (tx < 0) tx = 0; else if (tx >= W) tx = W - 1;
+  if (ty < 0) ty = 0; else if (ty >= D) ty = D - 1;
+  S.ind = (tflag[ty * W + tx] & F_INDOOR) ? 1 : 0;
+  S.id = 0x10000000 | (p << 3) | (f & 7);
+  S.ar = MA[m * 3]; S.ag = MA[m * 3 + 1]; S.ab = MA[m * 3 + 2]; S.k = MS[m];
+  switch (m) {
+    case MT.LAMP: if (f === 5) { S.er = lEr[id] * 1.4; S.eg = lEg[id] * 1.4; S.eb = lEb[id] * 1.4; } break;
+    case MT.SIGN: shadeSign(p, signs[id], f, u, w); break;
+    case MT.BILL: shadeBill(p, bills[id], f, u, w); break;
+    case MT.CAR: {
+      const moving = id < 1000, C = moving ? cars[id].col : parkedCols[id - 1000];
+      S.ar = C[0]; S.ag = C[1]; S.ab = C[2];
+      if (f === 0) {
+        if (w > -0.05 && Math.abs(v) > 0.52) { if (moving) { S.er = 2.6; S.eg = 2.4; S.eb = 2.0; } else { S.ar = S.ag = S.ab = 0.5; } }
+        else { S.ar *= 0.35; S.ag *= 0.35; S.ab *= 0.35; }
+      } else if (f === 1) {
+        if (w > 0.02 && w < 0.22) { const k = moving ? (cars[id].brake ? 2.4 : 1.1) : 0.25; S.er = 1.0 * k; S.eg = 0.06 * k; S.eb = 0.08 * k; }
+      } else if ((f === 2 || f === 3) && Math.abs(w + 0.05) < 0.03) { S.ar *= 0.4; S.ag *= 0.4; S.ab *= 0.4; }
+      break;
+    }
+    case MT.CARGLASS: if (id < 1000 && u > 0.2 && w < -0.1) { S.er = 0.05; S.eg = 0.3; S.eb = 0.35; } break;
+    case MT.PEDBODY: {
+      const P = peds[id]; S.ar = P.col[0]; S.ag = P.col[1]; S.ab = P.col[2];
+      if (P.acc >= 0) { const band = (w + 0.5) * 4; if (band - Math.floor(band) < 0.16) { const c = NEON[P.acc]; S.er = c[0] * 1.5; S.eg = c[1] * 1.5; S.eb = c[2] * 1.5; } }
+      break;
+    }
+    case MT.KEEPER: {
+      const front = u * pC[p] + v * pS[p];
+      if (front > 0.05 && w < 0.35) { S.ar = 0.55; S.ag = 0.55; S.ab = 0.52; } else { S.ar = 0.12; S.ag = 0.1; S.ab = 0.14; }
+      break;
+    }
+    case MT.PEDHEAD: {
+      const P = id >= 0 ? peds[id] : keeper;
+      S.ar = P.skin[0]; S.ag = P.skin[1]; S.ab = P.skin[2];
+      if (P.visor >= 0 && w > -0.02 && w < 0.045 && u * pC[p] + v * pS[p] > 0.03) { const c = NEON[P.visor]; S.er = c[0] * 1.8; S.eg = c[1] * 1.8; S.eb = c[2] * 1.8; }
+      break;
+    }
+    case MT.UMB: {
+      const c = NEON[peds[id].umb];
+      if (f === 6 || u * u + v * v > 0.2) { S.er = c[0] * 1.3; S.eg = c[1] * 1.3; S.eb = c[2] * 1.3; }
+      break;
+    }
+    case MT.LEDSTICK: { const c = NEON[peds[id].umb]; S.er = c[0] * 1.8; S.eg = c[1] * 1.8; S.eb = c[2] * 1.8; break; }
+    case MT.CANOPY: case MT.PLANT: {
+      const n = hash3((px * 3) | 0, (py * 3) | 0, (pz * 3) | 0), k = 0.35 + 0.9 * n;
+      S.ar = 0.07 * k; S.ag = 0.24 * k; S.ab = 0.12 * k;
+      if (id === 1 && hash3((px * 6) | 0, (py * 6) | 0, (pz * 6) | 0) > 0.93) {
+        const c = NEON[(n * 6) | 0], tw = 0.6 + 0.4 * Math.sin(time * 3 + n * 20);
+        S.er = c[0] * 1.4 * tw; S.eg = c[1] * 1.4 * tw; S.eb = c[2] * 1.4 * tw;
+      }
+      break;
+    }
+    case MT.TLIGHT: if (f === 0) {
+      const st = sigState(APPR_GROUP[id]);
+      const li = w > 0.18 ? 0 : w > -0.18 ? 1 : 2;
+      const lc = w - (li === 0 ? 0.36 : li === 1 ? 0 : -0.36);
+      if (lc * lc + v * v < 0.013) {
+        const C = TLC[li], on = (li === 0 && st === 0) || (li === 1 && st === 1) || (li === 2 && st === 2);
+        if (on) { S.er = C[0] * 3; S.eg = C[1] * 3; S.eb = C[2] * 3; } else { S.ar = C[0] * 0.12; S.ag = C[1] * 0.12; S.ab = C[2] * 0.12; }
+      }
+    } break;
+    case MT.PEDSIG: if (f < 4) {
+      if (pedWalk(id)) { S.er = 0.8; S.eg = 1.1; S.eb = 1.3; } else { S.er = 1.4; S.eg = 0.5; S.eb = 0.1; }
+    } break;
+    case MT.DOOR: if (f < 2) {
+      if (Math.abs(v) > pHY[p] - 0.07 || Math.abs(w) > pHZ[p] - 0.07 || Math.abs(w - 0.25) < 0.03) { S.er = 0.15; S.eg = 0.9; S.eb = 1.0; }
+    } break;
+    case MT.COUNTER:
+      if (f === 4) { S.ar = 0.45; S.ag = 0.3; S.ab = 0.2; S.k = 0.6; }
+      else if (f === 3 && id === 0 && w > pHZ[p] - 0.14 && w < pHZ[p] - 0.07) { S.er = 1.6; S.eg = 0.2; S.eb = 1.0; }
+      break;
+    case MT.SHELF: if (f === 3) {
+      const wb = (w + 10) * 2;
+      if (wb - Math.floor(wb) < 0.08) { S.ar = S.ag = S.ab = 0.3; }
+      else if (hash3(((u + 10) * 5) | 0, ((w + 10) * 3.4) | 0, 13) > 0.3) {
+        const c = NEON[(hash3(((u + 10) * 5) | 0, ((w + 10) * 3.4) | 0, 14) * 6) | 0];
+        S.er = c[0] * 0.45; S.eg = c[1] * 0.45; S.eb = c[2] * 0.45; S.ar = S.ag = S.ab = 0.2;
+      }
+    } break;
+    case MT.SCREEN: if (f === 0) {
+      const row = Math.floor((pHZ[p] - w) / 0.075) + Math.floor(time * 3);
+      const col = Math.floor((v + pHY[p]) / 0.055);
+      const len = 6 + ((hash3(row, 0, 21) * 14) | 0);
+      if (Math.abs(v) > pHY[p] - 0.04 || Math.abs(w) > pHZ[p] - 0.04) { S.ar = S.ag = S.ab = 0.1; }
+      else if (col < len && hash3(row, col, 22) > 0.3) { S.er = 0.25; S.eg = 1.5; S.eb = 0.7; }
+      else { S.er = 0.02; S.eg = 0.12; S.eb = 0.07; }
+    } break;
+    case MT.RACK: if (f === 1) {
+      const cy = Math.floor((v + pHY[p]) * 10), cz = Math.floor((w + pHZ[p]) * 10);
+      if ((cy & 1) === 0 && cz % 3 === 0) {
+        if (hash3(cy + id * 31, cz, (time * (2 + id)) | 0) > 0.45) { if (hash3(cy, cz, 5) > 0.7) { S.er = 1.4; S.eg = 0.8; S.eb = 0.1; } else { S.er = 0.2; S.eg = 1.4; S.eb = 0.5; } }
+      } else if (cz % 3 === 1) { S.ar = S.ag = S.ab = 0.12; }
+    } break;
+    case MT.CEIL: if (f === 5) { S.er = 2.2; S.eg = 1.9; S.eb = 1.5; } break;
+    case MT.VEND: {
+      const c = NEON[id];
+      if (f === 0) {
+        if (w > pHZ[p] - 0.28) { S.er = c[0] * 1.6; S.eg = c[1] * 1.6; S.eb = c[2] * 1.6; }
+        else if (w > -0.15 && Math.abs(v) < pHY[p] - 0.08) {
+          const gx = ((v + 1) * 7) | 0, gz = ((w + 1) * 6) | 0;
+          const cc = NEON[(hash3(gx, gz, id + 3) * 6) | 0];
+          S.er = 0.25 + cc[0] * 0.5; S.eg = 0.25 + cc[1] * 0.5; S.eb = 0.25 + cc[2] * 0.5;
+        } else if (w < -0.6 && w > -0.8 && Math.abs(v) < 0.25) { S.ar = S.ag = S.ab = 0.02; }
+      } else { S.ar = 0.1 + c[0] * 0.25; S.ag = 0.1 + c[1] * 0.25; S.ab = 0.1 + c[2] * 0.25; }
+      break;
+    }
+    case MT.KIOSK: if (f === 0 && w > -0.05 && w < 0.75 && Math.abs(v) < pHY[p] - 0.07) {
+      const row = Math.floor((0.75 - w) / 0.09);
+      const len = 4 + ((hash3(row, 1, 23) * 6) | 0), col = ((v + pHY[p]) / 0.06) | 0;
+      if (row === 0) { S.er = 1.2; S.eg = 0.6; S.eb = 0.1; }
+      else if (col < len && hash3(row, col, 24) > 0.25) { S.er = 0.5; S.eg = 0.9; S.eb = 1.4; } else { S.er = 0.03; S.eg = 0.06; S.eb = 0.12; }
+    } break;
+    case MT.FRIDGE: if (f === 2) {
+      const bu = (u + 10) * 4;
+      const k = (bu - Math.floor(bu) < 0.45) ? 0.9 : 0.45;
+      const sh = (w + 10) * 2.5;
+      if (sh - Math.floor(sh) < 0.1) { S.er = 0.2; S.eg = 0.25; S.eb = 0.3; } else { S.er = 0.45 * k; S.eg = 0.75 * k; S.eb = 1.0 * k; }
+    } break;
+    case MT.AWNING: {
+      const c = NEON[id];
+      if (f === 2) { S.er = c[0] * 1.1; S.eg = c[1] * 1.1; S.eb = c[2] * 1.1; }
+      else { const s = ((u + 20) * 1.4) | 0; const k = (s & 1) ? 0.35 : 0.1; S.ar = 0.1 + c[0] * k; S.ag = 0.1 + c[1] * k; S.ab = 0.1 + c[2] * k; }
+      break;
+    }
+    case MT.ANTENNA: if (w > pHZ[p] - 0.3 && ((time * 1.2 + id * 0.37) % 1) < 0.18) { S.er = 3; S.eg = 0.2; S.eb = 0.15; } break;
+    case MT.NEON: { const c = NEON[id], k = 2.0 * (hash3(p, (time * 20) | 0, 2) > 0.97 ? 0.3 : 1); S.er = c[0] * k; S.eg = c[1] * k; S.eb = c[2] * k; break; }
+    case MT.LANTERN: { const bnd = (w + 1) * 8; const k = bnd - Math.floor(bnd) < 0.2 ? 0.6 : 1.7; S.er = 1.0 * k; S.eg = 0.25 * k; S.eb = 0.1 * k; break; }
+    case MT.WALLLAMP: if (f !== 4) { S.er = lEr[id] * 1.2; S.eg = lEg[id] * 1.2; S.eb = lEb[id] * 1.2; } break;
+    case MT.BOLLARD: if (w > 0.2 && w < 0.32) { S.ar = S.ag = S.ab = 0.05; } break;
+    case MT.CRATE: { const k = (w + 5) * 4; if (k - Math.floor(k) < 0.12) { S.ar *= 0.5; S.ag *= 0.5; S.ab *= 0.5; } break; }
+    case MT.DUMP: if (f === 4) { S.ar = 0.16; S.ag = 0.26; S.ab = 0.2; } break;
+    case MT.TANK: { const k = (Math.atan2(v, u) + 4) * 3; if (k - Math.floor(k) < 0.15) { S.ar *= 0.6; S.ag *= 0.6; S.ab *= 0.6; } break; }
+  }
+  if (hiGroup >= 0 && pGroup[p] === hiGroup) {
+    const k = 0.3 + 0.2 * Math.sin(time * 6);
+    S.er += 0.12 * k; S.eg += 0.9 * k; S.eb += 0.75 * k;
+  }
+}
+
+// ---------- sky, distant skyline, flying traffic ----------
+const flyers = [];
+function initFlyers(R) {
+  flyers.length = 0;
+  for (let k = 0; k < 6; k++) flyers.push({ cx: 64 + R.range(-40, 40), cy: 63 + R.range(-40, 40), rad: R.range(120, 240),
+    alt: R.range(70, 120), spd: R.range(0.02, 0.05) * (R.chance(0.5) ? 1 : -1), ph: R.range(0, TAU),
+    col: R.chance(0.5) ? [1, 0.25, 0.2] : [0.45, 0.9, 1.0], dx: 0, dy: 0, dz: 0, on: 0 });
+}
+function updateFlyers() {
+  for (const f of flyers) {
+    const a = f.ph + time * f.spd;
+    const x = f.cx + Math.cos(a) * f.rad - cam.x, y = f.cy + Math.sin(a) * f.rad - cam.y, z = f.alt - cam.z;
+    const il = 1 / Math.sqrt(x * x + y * y + z * z);
+    f.dx = x * il; f.dy = y * il; f.dz = z * il;
+    f.on = ((time * 1.5 + f.ph) % 1) < 0.35 ? 1 : 0;
+  }
+}
+function shadeSky(i, dx, dy, dz, kind, t) {
+  let r, g, b, id = 0, em = false;
+  S.tex = 0.5;
+  if (kind === K_OUT && cam.z + dz * t < 9) {
+    const q = t * INV_FOG, f = Math.exp(-q * q);
+    finish(i, FOG_R * (1 - f), FOG_G * (1 - f), FOG_B * (1 - f), false, t, 3, f, 0.5);
+    return;
+  }
+  if (dz <= 0.0) {
+    finish(i, FOG_R, FOG_G, FOG_B, false, 999, 0, 0, 0.5);
+    return;
+  }
+  const az = Math.atan2(dy, dx), a01 = (az + PI) / TAU;
+  const bin = Math.min(SKY_BINS - 1, (a01 * SKY_BINS) | 0), hs = skyH[bin];
+  const haze = 0.08 * Math.exp(-dz * 5);
+  if (dz < hs) {
+    r = 0.012 + haze * 0.5; g = 0.012 + haze * 0.2; b = 0.024 + haze * 0.45; id = 2;
+    const wx = (a01 * 1600) | 0, wy = (dz * 320) | 0;
+    const hh = hash3(wx, wy, 99);
+    if (hh > 0.9 && ((wx + wy) & 1)) { const k = 0.1 + 0.18 * hash3(wx, wy, 98); if (hh > 0.975) { r += k * 0.4; g += k * 0.8; b += k; } else { r += k; g += k * 0.7; b += k * 0.4; } }
+    if (skyBeacon[bin] && hs - dz < 0.012 && ((time + bin * 0.13) % 1.4) < 0.25) { r += 0.5; g += 0.04; b += 0.03; em = true; }
+  } else {
+    r = 0.008 + haze * 0.95; g = 0.007 + haze * 0.32; b = 0.022 + haze * 0.85;
+    const sx = (a01 * 900) | 0, sy = (dz * 450) | 0;
+    if (hash3(sx, sy, 7) > 0.9965) { r += 0.14; g += 0.14; b += 0.18; }
+    const cl = Math.sin(az * 5 + dz * 16 + time * 0.03) * Math.sin(az * 2.3 - dz * 9);
+    if (cl > 0.55) { const k = (cl - 0.55) * 0.12 * Math.exp(-dz * 2); r += k * 0.9; g += k * 0.4; b += k * 0.9; }
+  }
+  for (let k = 0; k < flyers.length; k++) {
+    const f = flyers[k];
+    if (dx * f.dx + dy * f.dy + dz * f.dz > 0.99994) {
+      if (f.on) { r += f.col[0] * 2.2; g += f.col[1] * 2.2; b += f.col[2] * 2.2; } else { r += 0.5; g += 0.5; b += 0.55; }
+      em = true; id = 4;
+    }
+  }
+  finish(i, r, g, b, em, 999, id, 1, em ? 0 : 1.6);
+}
+
+// ---------- per cell shading and glyph selection ----------
+function shadeCell(i, ox, oy, oz, dx, dy, dz) {
+  const kind = HIT.kind, t = HIT.t;
+  if (kind === K_NONE || kind === K_OUT) { shadeSky(i, dx, dy, dz, kind, t); return; }
+  const px = ox + dx * t, py = oy + dy * t, pz = oz + dz * t;
+  const nx = HIT.nx, ny = HIT.ny, nz = HIT.nz;
+  S.ar = S.ag = S.ab = 0.3; S.er = S.eg = S.eb = 0; S.k = 0; S.ind = 0; S.id = 1;
+  S.tex = hash3((px * 2.3) | 0, (py * 2.3) | 0, (pz * 2.3) | 0);
+  if (kind === K_VOX) shadeVoxel(px, py, pz, nx, ny, nz);
+  else if (kind === K_GROUND) shadeGround(px, py);
+  else shadePrim(px, py, pz);
+  gatherLight(px + nx * 0.03, py + ny * 0.03, pz + nz * 0.03, nx, ny, nz, S.ind, S.k, -dx, -dy, -dz);
+  let amb, abr, abg, abb;
+  // ambient differs per face direction so corners and volumes read even without local lights
+  const dirK = 0.78 + 0.3 * nx - 0.14 * ny + 0.3 * (nz > 0 ? nz : 0);
+  if (S.ind) { amb = 0.12 * dirK; abr = 1.0; abg = 0.86; abb = 0.72; }
+  else {
+    // walls catch more ambient city glow than the ground, which keeps volumes apart
+    amb = (nz > 0.5 ? 0.075 : 0.26 + 0.12 * Math.min(1, pz / 40)) * dirK;
+    abr = 0.62; abg = 0.7; abb = 1.0;
+  }
+  let r = S.ar * (amb * abr + LA.r) + LA.sr, g = S.ag * (amb * abg + LA.g) + LA.sg, b = S.ab * (amb * abb + LA.b) + LA.sb;
+  if (S.k > 0.3 && !S.ind) {
+    const gr = 1 - (dz < 0 ? -dz : dz);
+    const sh = gr * gr * gr * gr * S.k * 0.05;
+    r += sh * 0.9; g += sh * 0.45; b += sh * 0.95;
+  }
+  const q = t * INV_FOG, f = Math.exp(-q * q), fe = Math.exp(-q * q * 0.35);
+  const emi = (S.er + S.eg + S.eb) * fe;
+  r = r * f + S.er * fe + FOG_R * (1 - f);
+  g = g * f + S.eg * fe + FOG_G * (1 - f);
+  b = b * f + S.eb * fe + FOG_B * (1 - f);
+  finish(i, r, g, b, emi > (r + g + b) * 0.5, t, S.id, f, 0);
+}
+
+function finish(i, r, g, b, emDom, d, id, fogf, bias) {
+  const k = CFG.exposure;
+  r = r * k / (1 + r * k); g = g * k / (1 + g * k); b = b * k / (1 + b * k);
+  const lum = 0.3 * r + 0.55 * g + 0.15 * b;
+  let lv = Math.pow(lum, 0.6) * RAMP_MAX + 0.25 - bias;
+  lv = lv < 0 ? 0 : lv > RAMP_MAX ? RAMP_MAX : lv;
+  glyphA[i] = rampG[lv | 0];
+  depthA[i] = d; sidA[i] = id; fogA[i] = fogf; emisA[i] = emDom ? 1 : 0;
+  let mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+  if (mx < 1e-4) mx = 1e-4;
+  let inten = 0.1 + 0.95 * Math.sqrt(lum);
+  if (inten > 1) inten = 1;
+  let cr = r / mx, cg = g / mx, cb = b / mx;
+  if (!emDom) { cr = INK_R * 0.5 + cr * 0.5; cg = INK_G * 0.5 + cg * 0.5; cb = INK_B * 0.5 + cb * 0.5; }
+  colRA[i] = (cr * inten * 255) | 0; colGA[i] = (cg * inten * 255) | 0; colBA[i] = (cb * inten * 255) | 0;
+}
+
+function edgePass() {
+  for (let r = 1; r < rows - 1; r++) {
+    let i = r * cols + 1;
+    for (let c = 1; c < cols - 1; c++, i++) {
+      if (emisA[i]) continue;
+      const id = sidA[i];
+      if (id <= 4) continue;          // sky, ground, skyline and void never get outlines
+      const d = depthA[i];
+      if (d > 60) continue;
+      const thr = d * 0.1 + 0.35;
+      const iL = i - 1, iR = i + 1, iUp = i - cols, iD = i + cols;
+      const L = sidA[iL] !== id && depthA[iL] - d > thr;
+      const Rr = sidA[iR] !== id && depthA[iR] - d > thr;
+      const U = sidA[iUp] !== id && depthA[iUp] - d > thr;
+      const Dn = sidA[iD] !== id && depthA[iD] - d > thr;
+      let g = -1;
+      if (L || Rr || U || Dn) {
+        const hor = L || Rr, ver = U || Dn;
+        if (hor && !ver) g = G_PIPE;
+        else if (ver && !hor) g = U ? G_DASH : G_UNDER;
+        else g = ((U && L) || (Dn && Rr)) ? G_SLASH : G_BSLASH;
+      } else if (d < 30) {
+        // creases between different surfaces at similar depth (building corners, prop joints)
+        const idR = sidA[iR], idD = sidA[iD];
+        if (idR !== id && idR > 4 && Math.abs(depthA[iR] - d) < thr) g = G_PIPE;
+        else if (idD !== id && idD > 4 && Math.abs(depthA[iD] - d) < thr) g = G_UNDER;
+      }
+      if (g >= 0) {
+        glyphA[i] = g;
+        const minI = 95 * fogA[i] + 20;
+        const m = Math.max(colRA[i], colGA[i], colBA[i]);
+        if (m < minI) {
+          if (m < 8) { colRA[i] = INK_R * minI; colGA[i] = INK_G * minI; colBA[i] = INK_B * minI; }
+          else { const s = minI / m; colRA[i] = Math.min(255, colRA[i] * s); colGA[i] = Math.min(255, colGA[i] * s); colBA[i] = Math.min(255, colBA[i] * s); }
+        }
+      }
+    }
+  }
+}
+
+// ---------- rain: real 3D particles, depth tested against the frame ----------
+const RN = CFG.rainDrops;
+const rainX = new Float32Array(RN), rainY = new Float32Array(RN), rainZ = new Float32Array(RN), rainS = new Float32Array(RN);
+function initRain() {
+  for (let k = 0; k < RN; k++) { rainX[k] = player.x + Math.random() * 36 - 18; rainY[k] = player.y + Math.random() * 36 - 18; rainZ[k] = Math.random() * 14; rainS[k] = 11 + Math.random() * 4; }
+}
+function updateRain(dt) {
+  for (let k = 0; k < RN; k++) {
+    rainZ[k] -= rainS[k] * dt;
+    const dx = rainX[k] - player.x, dy = rainY[k] - player.y;
+    if (dx > 18) rainX[k] -= 36; else if (dx < -18) rainX[k] += 36;
+    if (dy > 18) rainY[k] -= 36; else if (dy < -18) rainY[k] += 36;
+    if (rainZ[k] < 0) { rainZ[k] += 14; rainX[k] = player.x + Math.random() * 36 - 18; rainY[k] = player.y + Math.random() * 36 - 18; }
+  }
+}
+function rainPass() {
+  const ex = cam.x, ey = cam.y, ez = cam.z;
+  for (let k = 0; k < RN; k++) {
+    const x = rainX[k], y = rainY[k], z = rainZ[k];
+    const tx = x | 0, ty = y | 0;
+    if (tx < 0 || ty < 0 || tx >= W || ty >= D) continue;
+    if (colTop[ty * W + tx] > z) continue;
+    const rx = x - ex, ry = y - ey, rz = z - ez;
+    const zc = rx * cam.fx + ry * cam.fy + rz * cam.fz;
+    if (zc < 0.5) continue;
+    const sx = (rx * cam.rx + ry * cam.ry) / (zc * cam.tanX);
+    const sy = -(rx * cam.ux + ry * cam.uy + rz * cam.uz) / (zc * cam.tanY);
+    if (sx <= -1 || sx >= 1 || sy <= -1 || sy >= 1) continue;
+    const c = ((sx * 0.5 + 0.5) * cols) | 0, r = ((sy * 0.5 + 0.5) * rows) | 0;
+    const dist = Math.sqrt(rx * rx + ry * ry + rz * rz);
+    let idx = r * cols + c;
+    if (depthA[idx] < dist || emisA[idx]) continue;
+    const kk = Math.exp(-dist * 0.09);
+    const g = dist < 3.5 ? G_PIPE : dist < 9 ? G_QUOTE : G_DOT;
+    const R = (40 + 70 * kk) | 0, Gc = (55 + 85 * kk) | 0, B = (75 + 100 * kk) | 0;
+    glyphA[idx] = g; colRA[idx] = R; colGA[idx] = Gc; colBA[idx] = B;
+    if (dist < 3 && r + 1 < rows) { idx += cols; if (depthA[idx] > dist && !emisA[idx]) { glyphA[idx] = G_PIPE; colRA[idx] = R; colGA[idx] = Gc; colBA[idx] = B; } }
+  }
+}
+
+function renderScene() {
+  const ex = cam.x, ey = cam.y, ez = cam.z, tx = cam.tanX, ty = cam.tanY;
+  updateFlyers();
+  let i = 0;
+  for (let r = 0; r < rows; r++) {
+    const v = vArr[r] * ty;
+    const bx = cam.fx - cam.ux * v, by = cam.fy - cam.uy * v, bz = cam.fz - cam.uz * v;
+    for (let c = 0; c < cols; c++, i++) {
+      const u = uArr[c] * tx;
+      let dx = bx + cam.rx * u, dy = by + cam.ry * u, dz = bz;
+      const il = 1 / Math.sqrt(dx * dx + dy * dy + dz * dz);
+      dx *= il; dy *= il; dz *= il;
+      castRay(ex, ey, ez, dx, dy, dz, CFG.maxDist);
+      shadeCell(i, ex, ey, ez, dx, dy, dz);
+    }
+  }
+  if (state.edges) edgePass();
+  if (state.rain) rainPass();
+}
+
+function setupGL(oc, o, chars) {
+  // glyph atlas: all glyphs side by side in one strip
+  const ac = document.createElement('canvas');
+  ac.width = cw * chars.length; ac.height = chh;
+  const a = ac.getContext('2d', { willReadFrequently: true });
+  a.font = o.font; a.textAlign = 'center'; a.textBaseline = 'middle'; a.fillStyle = '#fff';
+  chars.forEach((chr, g) => a.fillText(chr, g * cw + cw / 2, chh / 2 + chh * 0.05));
+  if (!glProg) {
+    const vs = 'attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.0,1.0);}';
+    const fs = 'precision highp float;uniform sampler2D uCells;uniform sampler2D uAtlas;uniform vec2 uGrid;uniform vec2 uCell;uniform float uGlyphs;uniform float uH;' +
+      'void main(){vec2 p=vec2(gl_FragCoord.x,uH-gl_FragCoord.y);vec2 cell=floor(p/uCell);vec2 ic=p-cell*uCell;' +
+      'vec4 d=texture2D(uCells,(cell+0.5)/uGrid);float g=floor(d.a*255.0+0.5);' +
+      'if(g<0.5){gl_FragColor=vec4(0.0,0.0,0.0,1.0);return;}' +
+      'float al=texture2D(uAtlas,vec2((g*uCell.x+ic.x)/(uGlyphs*uCell.x),ic.y/uCell.y)).a;' +
+      'gl_FragColor=vec4(d.rgb*al,1.0);}';
+    const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+    try {
+      glProg = gl.createProgram();
+      gl.attachShader(glProg, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(glProg, sh(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(glProg);
+      if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) throw new Error('link failed');
+    } catch (err) { console.warn('WebGL glyph path disabled:', err.message); gl = null; ctx = null; return; }
+    gl.useProgram(glProg);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(glProg, 'aPos');
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    for (const n of ['uCells', 'uAtlas', 'uGrid', 'uCell', 'uGlyphs', 'uH']) glU[n] = gl.getUniformLocation(glProg, n);
+    const mk = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+    glCellTex = mk(); glAtlasTex = mk();
+  }
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glAtlasTex);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, a.getImageData(0, 0, ac.width, ac.height));
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glCellTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.uniform1i(glU.uCells, 0); gl.uniform1i(glU.uAtlas, 1);
+  gl.uniform2f(glU.uGrid, cols, rows); gl.uniform2f(glU.uCell, cw, chh);
+  gl.uniform1f(glU.uGlyphs, chars.length); gl.uniform1f(glU.uH, rows * chh);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+function blitGlow() {
+  for (let i = 0; i < NC; i++) {
+    const k = glyphCov[glyphA[i]] * (emisA[i] ? 1.0 : 0.25);
+    gBuf32[i] = 0xff000000 | (((colBA[i] * k) | 0) << 16) | (((colGA[i] * k) | 0) << 8) | ((colRA[i] * k) | 0);
+  }
+  gctx.putImageData(gImg, 0, 0);
+}
+function blit() {
+  if (state.glow) blitGlow();
+  if (gl) {
+    for (let i = 0, j = 0; i < NC; i++, j += 4) { cellData[j] = colRA[i]; cellData[j + 1] = colGA[i]; cellData[j + 2] = colBA[i]; cellData[j + 3] = glyphA[i]; }
+    gl.activeTexture(gl.TEXTURE0);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, cellData);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return;
+  }
+  buf32.fill(0xff000000);
+  const W2 = canvas.width;
+  let i = 0;
+  for (let r = 0; r < rows; r++) {
+    const rowBase = r * chh * W2;
+    for (let c = 0; c < cols; c++, i++) {
+      const g = glyphA[i];
+      if (g === 0) continue;
+      const base = rowBase + c * cw;
+      const R = colRA[i], G = colGA[i], B = colBA[i];
+      const s = glyphStart[g], e = s + glyphLen[g];
+      for (let k = s; k < e; k++) {
+        const a = glyphAl[k];
+        buf32[base + glyphOff[k]] = 0xff000000 | (((B * a) >> 8) << 16) | (((G * a) >> 8) << 8) | ((R * a) >> 8);
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// =====================================================================
+// 11. ENTITY SYSTEM
+//    Dynamic entities are rebuilt into primitives and lights every frame.
+// =====================================================================
+const peds = [], cars = [];
+const door = { open: 0, target: 0, group: -1 };
+const keeper = { x: 80.2, y: 83.2, h: -PI / 2, skin: [0.5, 0.38, 0.32], visor: 4, group: -1 };
+const SIG = { t: 0 };
+const CYCLE = 28;
+// 0 red, 1 yellow, 2 green
+function sigState(group) {
+  const t = SIG.t % CYCLE;
+  if (group === 0) return t < 10 ? 2 : t < 13 ? 1 : 0;
+  return t >= 14 && t < 24 ? 2 : t >= 24 && t < 27 ? 1 : 0;
+}
+// crossing type 1 crosses the avenue, type 2 crosses the street
+function pedWalk(type) { const t = SIG.t % CYCLE; return type === 1 ? t >= 14 && t < 20 : t < 6; }
+let pedRng = new RNG(1), carRng = new RNG(2);
+const inWorld = (x, y) => x >= 0 && y >= 0 && x < W && y < D;
+
+function rebuildDynamic() {
+  nPrim = nStatic; lCount = lStatic; headD.fill(-1);
+  nLight = nLightS; cCount = cStatic; cHeadD.fill(-1); topD.fill(0); chunkTopD.fill(0);
+  const dp = addPrim(P_BOX, 74.5, 79 + door.open * 1.9, 1.0, 0.07, 0.98, 1.0, 0, MT.DOOR, 0, door.open < 0.7 ? PF_COLLIDE : 0, door.group);
+  registerPrim(dp, headD);
+  pushKeeper();
+  for (let k = 0; k < peds.length; k++) pushPed(peds[k], k);
+  for (let k = 0; k < cars.length; k++) {
+    const c = cars[k];
+    if (!c.active || !inWorld(c.x, c.y)) continue;
+    const n0 = nPrim;
+    addCarPrims(c.x, c.y, c.h, k, PF_COLLIDE);
+    for (let q = n0; q < nPrim; q++) registerPrim(q, headD);
+    const hx = Math.cos(c.h), hy = Math.sin(c.h);
+    let L = addLight(c.x + hx * 5.5, c.y + hy * 5.5, 0.9, 11, 1.3, 1.2, 1.0, 0, 0);
+    if (L >= 0) registerLight(L, cHeadD);
+    if (c.glow >= 0) {
+      const g = NEON[c.glow];
+      L = addLight(c.x, c.y, 0.25, 4.2, g[0] * 1.3, g[1] * 1.3, g[2] * 1.3, 0, 0);
+      if (L >= 0) registerLight(L, cHeadD);
+    }
+  }
+}
+function pushKeeper() {
+  const K = keeper, sway = Math.sin(time * 1.3) * 0.03;
+  let p = addPrim(P_CYL, K.x + sway, K.y, 0.9, 0.27, 0, 0.62, K.h, MT.KEEPER, 0, PF_COLLIDE, K.group);
+  registerPrim(p, headD);
+  p = addPrim(P_SPH, K.x + sway + Math.cos(K.h) * 0.03, K.y + Math.sin(K.h) * 0.03, 1.68, 0.14, 0, 0, K.h, MT.PEDHEAD, -1, 0, K.group);
+  registerPrim(p, headD);
+}
+function pushPed(P, k) {
+  const s = P.scale, c = Math.cos(P.h), sn = Math.sin(P.h), g = 1000 + k;
+  const sw = P.moving ? Math.sin(P.phase) * 0.2 : 0;
+  let p;
+  for (let side = -1; side <= 1; side += 2) {
+    const fwd = sw * side, lat = 0.1 * side;
+    p = addPrim(P_BOX, P.x + c * fwd - sn * lat, P.y + sn * fwd + c * lat, 0.42 * s, 0.07, 0.07, 0.42 * s, P.h, MT.PEDLEG, k, 0, g);
+    registerPrim(p, headD);
+  }
+  p = addPrim(P_CYL, P.x, P.y, 1.17 * s, P.w, 0, 0.36 * s, P.h, MT.PEDBODY, k, PF_COLLIDE, g); registerPrim(p, headD);
+  p = addPrim(P_SPH, P.x + c * 0.02, P.y + sn * 0.02, 1.66 * s, 0.13, 0, 0, P.h, MT.PEDHEAD, k, 0, g); registerPrim(p, headD);
+  if (P.umb >= 0) {
+    const ux = P.x + c * 0.1 - sn * 0.18, uy = P.y + sn * 0.1 + c * 0.18;
+    p = addPrim(P_CYL, ux, uy, 2.05 * s, 0.58, 0, 0.04, 0, MT.UMB, k, 0, g); registerPrim(p, headD);
+    p = addPrim(P_CYL, ux, uy, 1.7 * s, 0.02, 0, 0.33 * s, 0, MT.LEDSTICK, k, 0, g); registerPrim(p, headD);
+  }
+}
+
+// =====================================================================
+// 12. PEDESTRIAN BEHAVIOR
+//    Pedestrians walk a sidewalk graph on the right-hand side of each
+//    edge, wait for the walk signal at crossings, sometimes stop to look
+//    around, slow down for each other and for the player, and turn to
+//    face the player when spoken to.
+// =====================================================================
+const nodes = [];
+const COATS = [[0.15, 0.15, 0.17], [0.30, 0.10, 0.10], [0.12, 0.16, 0.28], [0.25, 0.25, 0.20], [0.35, 0.33, 0.30], [0.10, 0.25, 0.20], [0.28, 0.12, 0.30]];
+const SKINS = [[0.55, 0.42, 0.35], [0.38, 0.28, 0.22], [0.70, 0.58, 0.50], [0.30, 0.20, 0.16]];
+function buildPedGraph() {
+  nodes.length = 0;
+  const node = (x, y) => { nodes.push({ x, y, adj: [] }); return nodes.length - 1; };
+  const link = (a, b, type) => { nodes[a].adj.push({ to: b, type }); nodes[b].adj.push({ to: a, type }); };
+  const SWc = node(56, 56), SEc = node(72, 56), NWc = node(56, 70), NEc = node(72, 70);
+  link(SWc, SEc, 1); link(NWc, NEc, 1); link(SWc, NWc, 2); link(SEc, NEc, 2);
+  const arms = [
+    { corner: SWc, fix: 56, axis: 'y', from: 56, to: 9 }, { corner: NWc, fix: 56, axis: 'y', from: 70, to: 119 },
+    { corner: SEc, fix: 72, axis: 'y', from: 56, to: 9 }, { corner: NEc, fix: 72, axis: 'y', from: 70, to: 119 },
+    { corner: SWc, fix: 56, axis: 'x', from: 56, to: 9 }, { corner: SEc, fix: 56, axis: 'x', from: 72, to: 119 },
+    { corner: NWc, fix: 70, axis: 'x', from: 56, to: 9 }, { corner: NEc, fix: 70, axis: 'x', from: 72, to: 119 },
+  ];
+  for (const A of arms) {
+    const dir = Math.sign(A.to - A.from);
+    const pts = [];
+    for (let t = A.from + dir * 10; dir > 0 ? t <= A.to : t >= A.to; t += dir * 10) pts.push({ t, mouth: null });
+    for (const m of alleyMouths) {
+      const on = A.axis === 'y' ? m.x === A.fix : m.y === A.fix;
+      const t = A.axis === 'y' ? m.y : m.x;
+      if (on && (t - A.from) * dir > 2 && (A.to - t) * dir > -1) pts.push({ t, mouth: m });
+    }
+    pts.sort((a, b) => (a.t - b.t) * dir);
+    let prev = A.corner;
+    for (const P of pts) {
+      const n = node(A.axis === 'y' ? A.fix : P.t, A.axis === 'y' ? P.t : A.fix);
+      link(prev, n, 0); prev = n;
+      if (P.mouth) {
+        const a1 = node(P.mouth.pts[0][0], P.mouth.pts[0][1]), a2 = node(P.mouth.pts[1][0], P.mouth.pts[1][1]);
+        link(n, a1, 0); link(a1, a2, 0);
+      }
+    }
+  }
+}
+function spawnPeds(R) {
+  peds.length = 0;
+  for (let k = 0; k < 28; k++) {
+    let a, e;
+    do { a = R.int(0, nodes.length - 1); e = R.pick(nodes[a].adj); } while (e.type !== 0);
+    const A = nodes[a], B = nodes[e.to], t = R.next();
+    peds.push({ x: lerp(A.x, B.x, t), y: lerp(A.y, B.y, t), h: Math.atan2(B.y - A.y, B.x - A.x), from: a, to: e.to, type: 0,
+      spd: R.range(1.0, 1.6), off: R.range(0.15, 0.5), state: 'walk', timer: 0, lookH: 0, phase: R.range(0, TAU), moving: 1,
+      col: R.pick(COATS), skin: R.pick(SKINS), acc: R.chance(0.3) ? R.int(0, 5) : -1, umb: R.chance(0.3) ? R.int(0, 5) : -1,
+      visor: R.chance(0.25) ? R.int(0, 5) : -1, scale: R.range(0.92, 1.08), w: R.range(0.18, 0.25), idleP: R.range(0.05, 0.22) });
+  }
+}
+function pedArrive(P) {
+  const n = nodes[P.to];
+  const opts = n.adj.filter(e => e.to !== P.from);
+  const choice = opts.length ? pedRng.pick(opts) : n.adj[0];
+  P.from = P.to; P.to = choice.to; P.type = choice.type;
+  if (choice.type > 0) P.state = 'wait';
+  else if (pedRng.chance(P.idleP)) { P.state = 'idle'; P.timer = pedRng.range(1.5, 5); P.lookH = pedRng.range(-PI, PI); }
+  else P.state = 'walk';
+}
+function updatePeds(dt) {
+  for (let k = 0; k < peds.length; k++) {
+    const P = peds[k];
+    P.moving = 0;
+    if (P.state === 'talk') {
+      P.h = angleTo(P.h, Math.atan2(player.y - P.y, player.x - P.x), 6 * dt);
+      P.timer -= dt; if (P.timer <= 0) P.state = 'walk';
+      continue;
+    }
+    if (P.state === 'idle') { P.h = angleTo(P.h, P.lookH, 2 * dt); P.timer -= dt; if (P.timer <= 0) P.state = 'walk'; continue; }
+    const A = nodes[P.from], B = nodes[P.to];
+    let ex = B.x - A.x, ey = B.y - A.y;
+    const el = Math.hypot(ex, ey) || 1; ex /= el; ey /= el;
+    if (P.state === 'wait') {
+      P.h = angleTo(P.h, Math.atan2(ey, ex), 3 * dt);
+      if (!pedWalk(P.type)) continue;
+      P.state = 'walk';
+    }
+    const tx = B.x + ey * P.off, ty = B.y - ex * P.off;
+    const dx = tx - P.x, dy = ty - P.y, dist = Math.hypot(dx, dy);
+    if (dist < 0.35) { pedArrive(P); continue; }
+    P.h = angleTo(P.h, Math.atan2(dy, dx), 5 * dt);
+    const ch = Math.cos(P.h), sh = Math.sin(P.h);
+    let f = 1;
+    const pdx = player.x - P.x, pdy = player.y - P.y, pd = Math.hypot(pdx, pdy);
+    if (pd < 1.7 && pdx * ch + pdy * sh > 0) f = Math.min(f, (pd - 0.75) / 0.95);
+    for (let j = 0; j < peds.length; j++) {
+      if (j === k) continue;
+      const O = peds[j], ox = O.x - P.x, oy = O.y - P.y;
+      if (ox > 1.3 || ox < -1.3 || oy > 1.3 || oy < -1.3) continue;
+      const along = ox * ch + oy * sh, lat = -ox * sh + oy * ch;
+      if (along > 0 && along < 1.2 && Math.abs(lat) < 0.55) { f = Math.min(f, 0.35); P.h += (lat > 0 ? -1 : 1) * 1.2 * dt; }
+    }
+    if (f < 0) f = 0;
+    const sp = P.spd * f;
+    P.x += ch * sp * dt; P.y += sh * sp * dt;
+    P.phase += sp * dt * 5.2;
+    P.moving = sp > 0.1 ? 1 : 0;
+  }
+}
+
+// =====================================================================
+// 13. VEHICLE BEHAVIOR
+//    Cars enter from the tunnels, stop at red lights, keep distance to
+//    the car ahead, brake for people, drive straight or turn right at
+//    the crossing, leave through another tunnel and respawn.
+// =====================================================================
+const APPR = [
+  { start: [65.75, -8], stop: [65.75, 53.3], entry: [65.75, 58], sExit: [65.75, 68], sEnd: [65.75, 136], rExit: [70, 61.5], rCtrl: [65.75, 61.5], rEnd: [136, 61.5] },
+  { start: [62.25, 136], stop: [62.25, 72.7], entry: [62.25, 68], sExit: [62.25, 58], sEnd: [62.25, -8], rExit: [58, 64.5], rCtrl: [62.25, 64.5], rEnd: [-8, 64.5] },
+  { start: [-8, 61.5], stop: [53.3, 61.5], entry: [58, 61.5], sExit: [70, 61.5], sEnd: [136, 61.5], rExit: [62.25, 58], rCtrl: [62.25, 61.5], rEnd: [62.25, -8] },
+  { start: [136, 64.5], stop: [74.7, 64.5], entry: [70, 64.5], sExit: [58, 64.5], sEnd: [-8, 64.5], rExit: [65.75, 68], rCtrl: [65.75, 64.5], rEnd: [65.75, 136] },
+];
+function setPath(c, a, turn) {
+  const A = APPR[a];
+  const pts = [A.start, A.stop, A.entry];
+  if (!turn) pts.push(A.sExit, A.sEnd);
+  else {
+    for (let i = 1; i < 8; i++) {
+      const t = i / 8, u = 1 - t;
+      pts.push([u * u * A.entry[0] + 2 * u * t * A.rCtrl[0] + t * t * A.rExit[0], u * u * A.entry[1] + 2 * u * t * A.rCtrl[1] + t * t * A.rExit[1]]);
+    }
+    pts.push(A.rExit, A.rEnd);
+  }
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  c.pts = pts; c.cum = cum; c.len = cum[cum.length - 1]; c.stopS = cum[1];
+  c.appr = a; c.turn = turn; c.passed = false;
+}
+let _px = 0, _py = 0;
+function pathPoint(c, s) {
+  const cum = c.cum, pts = c.pts;
+  if (s <= 0) { _px = pts[0][0]; _py = pts[0][1]; return; }
+  if (s >= c.len) { const q = pts[pts.length - 1]; _px = q[0]; _py = q[1]; return; }
+  let i = 1;
+  while (cum[i] < s) i++;
+  const t = (s - cum[i - 1]) / (cum[i] - cum[i - 1]);
+  _px = lerp(pts[i - 1][0], pts[i][0], t); _py = lerp(pts[i - 1][1], pts[i][1], t);
+}
+function placeCar(c) {
+  pathPoint(c, c.s - 1.2); const x0 = _px, y0 = _py;
+  pathPoint(c, c.s + 1.6); const x1 = _px, y1 = _py;
+  pathPoint(c, c.s);
+  c.x = _px; c.y = _py; c.h = Math.atan2(y1 - y0, x1 - x0);
+}
+function newCar(R) {
+  return { pts: null, cum: null, len: 0, s: 0, v: 0, vmax: R.range(8, 11.5), appr: 0, turn: false, stopS: 0, passed: false,
+    col: R.pick(CAR_COLS), glow: R.chance(0.35) ? R.int(0, 5) : -1, x: -50, y: -50, h: 0, active: false, wait: 0, brake: false };
+}
+function spawnCar(c) {
+  for (let tries = 0; tries < 8; tries++) {
+    const a = carRng.int(0, 3);
+    if (!cars.every(o => o === c || !o.active || o.appr !== a || o.s > 14)) continue;
+    setPath(c, a, carRng.chance(0.35));
+    c.s = 0; c.v = c.vmax * 0.8; c.active = true;
+    placeCar(c);
+    return;
+  }
+  c.active = false; c.wait = 1;
+}
+function spawnCars(R) {
+  cars.length = 0;
+  for (let k = 0; k < 10; k++) {
+    const c = newCar(R);
+    setPath(c, k % 4, R.chance(0.35));
+    c.s = 8 + Math.floor(k / 4) * 24 + R.range(0, 5);
+    c.v = c.vmax * 0.6; c.active = true;
+    cars.push(c);
+    placeCar(c);
+  }
+}
+function updateCars(dt) {
+  for (let k = 0; k < cars.length; k++) {
+    const c = cars[k];
+    if (!c.active) { c.wait -= dt; if (c.wait <= 0) spawnCar(c); continue; }
+    let target = c.vmax;
+    if (!c.passed) {
+      const d = c.stopS - c.s;
+      if (d < -0.5) c.passed = true;
+      else {
+        const st = sigState(APPR_GROUP[c.appr]);
+        if (st !== 2 && !(st === 1 && d < 3)) target = Math.min(target, Math.sqrt(10 * Math.max(0, d - 0.5)));
+      }
+    }
+    const ch = Math.cos(c.h), sh = Math.sin(c.h);
+    for (let j = 0; j < cars.length; j++) {
+      const o = cars[j];
+      if (o === c || !o.active) continue;
+      const rx = o.x - c.x, ry = o.y - c.y, along = rx * ch + ry * sh;
+      if (along <= 0 || along > 26) continue;
+      if (Math.abs(-rx * sh + ry * ch) > 1.8) continue;
+      target = Math.min(target, Math.sqrt(10 * Math.max(0, along - 6.7)));
+    }
+    const look = (x, y) => {
+      const rx = x - c.x, ry = y - c.y, along = rx * ch + ry * sh;
+      if (along <= 0 || along > 11) return;
+      if (Math.abs(-rx * sh + ry * ch) > 1.5) return;
+      target = Math.min(target, Math.sqrt(12 * Math.max(0, along - 3.2)));
+    };
+    look(player.x, player.y);
+    for (let j = 0; j < peds.length; j++) look(peds[j].x, peds[j].y);
+    c.brake = target < c.v - 0.3;
+    c.v += clamp(target - c.v, -8 * dt, 3.2 * dt);
+    if (c.v < 0) c.v = 0;
+    c.s += c.v * dt;
+    if (c.s >= c.len) { c.active = false; c.wait = carRng.range(0.5, 4); c.x = -50; c.y = -50; continue; }
+    placeCar(c);
+  }
+}
+
+// =====================================================================
+// 14. INTERACTIONS
+// =====================================================================
+const state = { credits: CFG.startCredits, ramen: 0, cola: 0, map: false, showMap: false, glow: true, rain: true, edges: true, started: false, wasLocked: false };
+let focus = null, hiGroup = -1, toastT = 0;
+const dlg = { open: false, who: '', lines: [], i: 0, shown: 0, onEnd: null, hint: '', sx: 0, sy: 0 };
+const term = { open: false, text: '', shown: 0 };
+const BARKS = [
+  'Rain has not stopped in nine days. Nobody asks why anymore.',
+  'Blackstar makes the only ramen that tastes like real salt.',
+  'Keep your eyes off my visor.',
+  'The tunnels are sealed. Company orders.',
+  'You look lost. The noodle bar is at the north-east corner of the crossing.',
+  'I sold my left ear for rent. Traffic sounds cheaper on this side.',
+  'The lights here run on a 28 second loop. I counted.',
+  'Neon Market has the good vending machines.',
+  'Do not trust the billboards. They blink back.',
+  'There is a public terminal in the noodle bar. Old node, still online.',
+];
+const TERM_LINES = [
+  'BLACKSTAR PUBLIC NODE // KANAL-9 GRID',
+  '',
+  '> link .......................... ok',
+  '> user .......................... guest',
+  '> weather ....................... rain, 100 percent, forever',
+  '> traffic loop .................. 28 s, north-south first',
+  '> tunnels ....................... sealed by order 77-B',
+  '> city grid map ................. downloading',
+  '  [##############################] done',
+  '',
+  'The map is stored on your visor. Press M to show or hide it.',
+  'Press E to log out.',
+];
+function toast(msg) { el.toast.textContent = msg; toastT = 2.6; }
+function focusLabel(f) {
+  switch (f.kind) {
+    case 'door': return door.target ? 'close the door' : 'open the door';
+    case 'keeper': return 'talk to the cook';
+    case 'terminal': return 'use the terminal';
+    case 'vending': return 'buy synth-cola (3 cred)';
+    case 'kiosk': return 'read the city notice';
+    case 'ped': return 'talk';
+  }
+  return 'interact';
+}
+let fBest = 0, fObj = null, fGroup = -1;
+function considerFocus(obj, x, y, z, r, group) {
+  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (d > r || d < 0.05) return;
+  const dot = (dx * cam.fx + dy * cam.fy + dz * cam.fz) / d;
+  if (dot < 0.82) return;
+  const score = dot * 2 - d * 0.25;
+  if (score <= fBest) return;
+  castRay(cam.x, cam.y, cam.z, dx / d, dy / d, dz / d, d + 0.5);
+  if (HIT.t < d - 0.6 && !(HIT.kind === K_PRIM && pGroup[HIT.prim] === group)) return;
+  fBest = score; fObj = obj; fGroup = group;
+}
+function updateFocus() {
+  focus = null; hiGroup = -1;
+  if (term.open) return;
+  fBest = -1e9; fObj = null; fGroup = -1;
+  for (const it of interactables) considerFocus(it, it.x, it.y, it.z, it.r, it.group);
+  for (let k = 0; k < peds.length; k++) {
+    const P = peds[k];
+    if (Math.abs(P.x - cam.x) > 3 || Math.abs(P.y - cam.y) > 3) continue;
+    considerFocus({ kind: 'ped', ped: P }, P.x, P.y, 1.4 * P.scale, 2.6, 1000 + k);
+  }
+  if (fObj) { focus = fObj; hiGroup = fGroup; }
+}
+function openDialog(who, lines, onEnd, hint) {
+  dlg.open = true; dlg.who = who; dlg.lines = lines; dlg.i = 0; dlg.shown = 0; dlg.onEnd = onEnd || null;
+  dlg.hint = hint || 'e to close'; dlg.sx = player.x; dlg.sy = player.y;
+  el.dialog.style.display = 'block'; el.dlgWho.textContent = who;
+}
+function closeDialog() { dlg.open = false; el.dialog.style.display = 'none'; }
+function advanceDialog() {
+  const line = dlg.lines[dlg.i];
+  if (dlg.shown < line.length) { dlg.shown = line.length; return; }
+  dlg.i++; dlg.shown = 0;
+  if (dlg.i >= dlg.lines.length) { const f = dlg.onEnd; closeDialog(); if (f) f(); }
+}
+function updateDialog(dt) {
+  if (!dlg.open) return;
+  if (Math.hypot(player.x - dlg.sx, player.y - dlg.sy) > 4) { closeDialog(); return; }
+  const line = dlg.lines[dlg.i];
+  dlg.shown = Math.min(line.length, dlg.shown + dt * 60);
+  el.dlgText.textContent = line.slice(0, dlg.shown | 0);
+  el.dlgHint.textContent = dlg.i === dlg.lines.length - 1 ? dlg.hint : 'e to continue';
+}
+function openTerminal() {
+  term.open = true; term.shown = 0; term.text = TERM_LINES.join('\n');
+  el.term.style.display = 'block';
+  state.map = true; state.showMap = true;
+}
+function closeTerminal() {
+  if (!term.open) return;
+  term.open = false; el.term.style.display = 'none';
+  toast('city map stored. press m to show or hide it.');
+}
+function updateTerminal(dt) {
+  if (!term.open) return;
+  term.shown = Math.min(term.text.length, term.shown + dt * 150);
+  el.termText.textContent = term.text.slice(0, term.shown | 0) + ((time * 2) % 1 < 0.5 ? '_' : ' ');
+}
+function interact() {
+  if (term.open) { closeTerminal(); return; }
+  if (dlg.open) { advanceDialog(); return; }
+  if (!focus) return;
+  switch (focus.kind) {
+    case 'door': door.target = door.target ? 0 : 1; toast(door.target ? 'the door slides open' : 'the door slides shut'); break;
+    case 'keeper':
+      if (state.credits >= 12) openDialog('the cook', ['Welcome to Blackstar. Sit anywhere that is dry.', 'One bowl of synth-ramen costs 12 cred.', 'Press E to pay. Walk away to skip it.'],
+        () => { state.credits -= 12; state.ramen++; toast('paid 12 cred. hot ramen +1'); }, 'e to pay');
+      else openDialog('the cook', ['You are short on cred, friend.', 'Come back when the rain pays you.']);
+      break;
+    case 'terminal': openTerminal(); break;
+    case 'vending':
+      if (state.credits >= 3) { state.credits -= 3; state.cola++; toast('clunk. synth-cola +1, 3 cred paid'); }
+      else toast('not enough cred');
+      break;
+    case 'kiosk':
+      openDialog('city notice', ['Kanal-9 civic notice. Curfew is lifted until further notice.',
+        'Blackstar Noodle Bar is open at the north-east corner of the crossing.',
+        'Its public terminal holds a city grid map. Guests may download it.',
+        'Cross only on the white signal. Cars do not wait for long.']);
+      break;
+    case 'ped':
+      focus.ped.state = 'talk'; focus.ped.timer = 4;
+      openDialog('stranger', [BARKS[(pedRng.next() * BARKS.length) | 0]]);
+      break;
+  }
+}
+
+// =====================================================================
+// 15. INPUT HANDLING
+// =====================================================================
+const keys = Object.create(null);
+let dragging = false, lastMX = 0, lastMY = 0;
+function setQuality(q) {
+  CFG.quality = clamp(q, 0, CFG.rowPresets.length - 1);
+  resize();
+  toast(`detail ${CFG.quality + 1}: ${cols} x ${rows} cells`);
+}
+function lookDelta(mx, my) {
+  player.yaw -= mx * CFG.mouseSens;
+  player.pitch = clamp(player.pitch - my * CFG.mouseSens, -1.45, 1.45);
+}
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  if (e.repeat) return;
+  switch (e.code) {
+    case 'KeyE': if (state.started) interact(); break;
+    case 'Escape': closeDialog(); closeTerminal(); break;
+    case 'KeyM': if (state.map) state.showMap = !state.showMap; else toast('no map yet. find a public terminal.'); break;
+    case 'KeyG': state.glow = !state.glow; glowCanvas.style.display = state.glow ? 'block' : 'none'; toast(state.glow ? 'glow on' : 'glow off'); break;
+    case 'KeyR': state.rain = !state.rain; toast(state.rain ? 'rain on' : 'rain off'); break;
+    case 'KeyX': state.edges = !state.edges; toast(state.edges ? 'outlines on' : 'outlines off'); break;
+    case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': setQuality(parseInt(e.code.slice(5), 10) - 1); break;
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; dragging = false; });
+function startGame() {
+  state.started = true;
+  el.intro.classList.add('hidden');
+  if (canvas.requestPointerLock) {
+    try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (err) { /* drag look still works */ }
+  }
+}
+el_intro().addEventListener('click', startGame);
+canvas.addEventListener('click', () => { if (state.started && document.pointerLockElement !== canvas && canvas.requestPointerLock) { try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (err) { /* ignore */ } } });
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === canvas;
+  if (locked) state.wasLocked = true;
+  else if (state.wasLocked && state.started) { el.intro.classList.remove('hidden'); state.started = false; setIntro(true); }
+});
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === canvas) { lookDelta(e.movementX || 0, e.movementY || 0); return; }
+  if (dragging) { lookDelta(e.clientX - lastMX, e.clientY - lastMY); lastMX = e.clientX; lastMY = e.clientY; }
+});
+canvas.addEventListener('mousedown', e => { if (document.pointerLockElement !== canvas) { dragging = true; lastMX = e.clientX; lastMY = e.clientY; } });
+window.addEventListener('mouseup', () => { dragging = false; });
+
+function movePlayer(dt) {
+  let fwd = 0, str = 0;
+  if (!term.open) {
+    if (keys.KeyW) fwd += 1; if (keys.KeyS) fwd -= 1;
+    if (keys.KeyD) str += 1; if (keys.KeyA) str -= 1;
+    if (keys.ArrowLeft) player.yaw += 2.2 * dt; if (keys.ArrowRight) player.yaw -= 2.2 * dt;
+    if (keys.ArrowUp) player.pitch = Math.min(1.45, player.pitch + 1.5 * dt);
+    if (keys.ArrowDown) player.pitch = Math.max(-1.45, player.pitch - 1.5 * dt);
+  }
+  player.sprint = !!(keys.ShiftLeft || keys.ShiftRight);
+  const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw);
+  let wx = cy * fwd + sy * str, wy = sy * fwd - cy * str;
+  const wl = Math.hypot(wx, wy);
+  if (wl > 0) { wx /= wl; wy /= wl; }
+  const spd = player.sprint ? CFG.sprintSpeed : CFG.walkSpeed;
+  const k = Math.min(1, CFG.accel * dt);
+  player.vx += (wx * spd - player.vx) * k; player.vy += (wy * spd - player.vy) * k;
+  const ox = player.x, oy = player.y;
+  const steps = Math.max(1, Math.ceil(Math.hypot(player.vx, player.vy) * dt / 0.15));
+  for (let s = 0; s < steps; s++) {
+    player.x += player.vx * dt / steps; player.y += player.vy * dt / steps;
+    resolveCollisions(player, CFG.radius);
+  }
+  player.x = clamp(player.x, 6.4, W - 6.4); player.y = clamp(player.y, 6.4, D - 6.4);
+  const moved = Math.hypot(player.x - ox, player.y - oy);
+  player.vx = (player.x - ox) / dt; player.vy = (player.y - oy) / dt;
+  player.speed = moved / dt;
+  player.bob += moved * 8.4;
+  player.eyeZ = CFG.eyeHeight + Math.sin(player.bob) * 0.04 * Math.min(1, player.speed / 3.4);
+}
+
+// =====================================================================
+// 16. HUD
+// =====================================================================
+const el = {};
+for (const id of ['hudTop', 'hudMap', 'hudKeys', 'prompt', 'toast', 'dialog', 'dlgWho', 'dlgText', 'dlgHint', 'term', 'termText', 'intro', 'introTitle', 'introText']) el[id] = document.getElementById(id);
+function el_intro() { return document.getElementById('intro'); }
+function districtName(x, y) {
+  const c = (y | 0) * W + (x | 0);
+  if (tflag[c] & F_INDOOR) return 'blackstar noodle bar';
+  if (x < 6 || y < 6 || x >= 122 || y >= 122) return 'sealed perimeter';
+  const inAv = x >= 54 && x < 74, inSt = y >= 54 && y < 72;
+  if (inAv && inSt) return 'kanal crossing';
+  if (inAv) return y < 54 ? 'avenue 9, south' : 'avenue 9, north';
+  if (inSt) return x < 54 ? 'kanal street, west' : 'kanal street, east';
+  for (const B of BLOCKS) if (x >= B.x0 && x < B.x1 && y >= B.y0 && y < B.y1) return B.name + ((tflag[c] & F_ALLEY) ? ', back alley' : '');
+  return 'kanal-9';
+}
+const COMPASS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
+let hudT = 0, mapT = 0, fpsVal = 60, frameMs = 10;
+function pad(s, n) { s = String(s); while (s.length < n) s = ' ' + s; return s; }
+function updateHUD(dt) {
+  el.prompt.textContent = focus && !dlg.open && !term.open ? `[e] ${focusLabel(focus)}` : '';
+  if (toastT > 0) { toastT -= dt; if (toastT <= 0) el.toast.textContent = ''; }
+  hudT -= dt; mapT -= dt;
+  if (hudT <= 0) {
+    hudT = 0.15;
+    let hd = (90 - player.yaw * 180 / PI) % 360; if (hd < 0) hd += 360;
+    const cmp = COMPASS[Math.round(hd / 45) % 8];
+    el.hudTop.innerHTML =
+      `kanal-9 <i>ascii city</i>   fps <i>${pad(Math.round(fpsVal), 3)}</i>   frame <i>${frameMs.toFixed(1)} ms</i>   grid <i>${cols}x${rows}</i>\n` +
+      `pos x <i>${pad(player.x.toFixed(1), 5)}</i>  y <i>${pad(player.y.toFixed(1), 5)}</i>  z <i>${player.eyeZ.toFixed(2)}</i>   heading <i>${pad(Math.round(hd), 3)} ${cmp}</i>\n` +
+      `district <i>${districtName(player.x, player.y)}</i>\n` +
+      `cred <i>${state.credits}</i>   ramen <i>${state.ramen}</i>   cola <i>${state.cola}</i>   seed <i>${CFG.seed}</i>`;
+  }
+  const showMap = state.map && state.showMap;
+  el.hudMap.classList.toggle('hidden', !showMap);
+  if (showMap && mapT <= 0) { mapT = 0.2; renderMap(); }
+}
+function renderMap() {
+  const MW = 35, MH = 19, sx = 2, sy = 3.3;
+  const grid = new Array(MW * MH).fill(null);
+  const cell = (x, y) => {
+    const c = Math.floor((x - player.x) / sx + MW / 2), r = Math.floor(MH / 2 - (y - player.y) / sy);
+    return c >= 0 && r >= 0 && c < MW && r < MH ? r * MW + c : -1;
+  };
+  for (const c of cars) if (c.active) { const k = cell(c.x, c.y); if (k >= 0) grid[k] = '<span class="c">c</span>'; }
+  for (const P of peds) { const k = cell(P.x, P.y); if (k >= 0 && !grid[k]) grid[k] = '<span class="h">o</span>'; }
+  let hd = (90 - player.yaw * 180 / PI) % 360; if (hd < 0) hd += 360;
+  const arrow = ['^', '>', 'v', '<'][Math.round(hd / 90) % 4];
+  let out = 'city grid\n';
+  for (let r = 0; r < MH; r++) {
+    for (let c = 0; c < MW; c++) {
+      const k = r * MW + c;
+      if (r === (MH >> 1) && c === (MW >> 1)) { out += `<span class="p">${arrow}</span>`; continue; }
+      if (grid[k]) { out += grid[k]; continue; }
+      const x = Math.floor(player.x + (c - MW / 2 + 0.5) * sx), y = Math.floor(player.y + (MH / 2 - r - 0.5) * sy);
+      if (x < 0 || y < 0 || x >= W || y >= D) { out += ' '; continue; }
+      const t = y * W + x, g = gmat[t];
+      if (tflag[t] & F_INDOOR) out += '_';
+      else if ((colLo[t] & 3) !== 0) out += '<span class="b">#</span>';
+      else if (g === G_ROAD) out += (tflag[t] & F_CROSS) ? '=' : '.';
+      else if (g === G_WALK) out += ':';
+      else if (g === G_ALLEY) out += ',';
+      else if (g === G_TUNNEL) out += '~';
+      else out += ' ';
+    }
+    out += '\n';
+  }
+  el.hudMap.innerHTML = out;
+}
+function setIntro(resume) {
+  let title = '';
+  const word = 'KANAL-9';
+  for (let row = 0; row < 5; row++) {
+    let line = '';
+    for (const ch of word) {
+      for (let col = 0; col < 3; col++) line += fontBit(ch.charCodeAt(0), row, col) ? '##' : '  ';
+      line += '  ';
+    }
+    title += line + '\n';
+  }
+  el.introTitle.textContent = title;
+  el.introText.innerHTML =
+    `a walkable ascii city.   seed ${CFG.seed}\n\n` +
+    `<b>${resume ? 'click to resume' : 'click to enter the city'}</b>\n\n` +
+    `<i>w a s d</i>  walk             <i>mouse</i>  look\n` +
+    `<i>shift</i>    sprint           <i>e</i>      interact\n` +
+    `<i>esc</i>      release mouse    <i>1 - 4</i>  detail level\n` +
+    `<i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>m</i> map\n\n` +
+    `start at the notice kiosk to your right.`;
+}
+
+// =====================================================================
+// 17. GAME LOOP
+// =====================================================================
+let last = 0;
+const perf = { t: 0, acc: 0, n: 0, checks: 0 };
+function autoQuality(dt) {
+  if (!state.started || perf.checks >= 2) return;
+  perf.t += dt; perf.acc += dt; perf.n++;
+  if (perf.t >= 3) {
+    const avg = perf.acc / perf.n;
+    perf.t = 0; perf.acc = 0; perf.n = 0; perf.checks++;
+    if (avg > 1 / 38 && CFG.quality > 0) { setQuality(CFG.quality - 1); toast('detail lowered to keep the frame rate up. keys 1 to 4 change it.'); }
+  }
+}
+function update(dt) {
+  movePlayer(dt);
+  door.open += clamp(door.target - door.open, -dt * 1.6, dt * 1.6);
+  const pin = (tflag[(player.y | 0) * W + (player.x | 0)] & F_INDOOR) !== 0;
+  const want = pin ? Math.atan2(player.y - keeper.y, player.x - keeper.x) : -PI / 2;
+  keeper.h = angleTo(keeper.h, want, 2.5 * dt);
+  updatePeds(dt);
+  updateCars(dt);
+  if (state.rain) updateRain(dt);
+  updateSigns();
+  updateLights();
+  rebuildDynamic();
+  updateCamera(dt);
+  updateFocus();
+  updateDialog(dt);
+  updateTerminal(dt);
+}
+let paused = false;
+function frame(now) {
+  let dt = last ? (now - last) / 1000 : 0.016;
+  last = now;
+  if (paused) { requestAnimationFrame(frame); return; }
+  if (dt > 0.1) dt = 0.1; else if (dt <= 0) dt = 0.001;
+  time += dt; SIG.t += dt;
+  update(dt);
+  const t0 = performance.now();
+  renderScene();
+  blit();
+  frameMs = frameMs * 0.92 + (performance.now() - t0) * 0.08;
+  fpsVal = fpsVal * 0.93 + (1 / dt) * 0.07;
+  autoQuality(dt);
+  updateHUD(dt);
+  requestAnimationFrame(frame);
+}
+function boot() {
+  generateCity(CFG.seed);
+  buildPedGraph();
+  pedRng = new RNG(CFG.seed ^ 0xa5a5a5);
+  carRng = new RNG(CFG.seed ^ 0x5a5a5a);
+  spawnPeds(pedRng);
+  spawnCars(carRng);
+  initFlyers(new RNG(CFG.seed + 7));
+  const kiosk = interactables.find(it => it.kind === 'kiosk');
+  if (kiosk) { spawn.x = 72.2; spawn.y = kiosk.y - 1.6; spawn.yaw = 98 * PI / 180; }
+  player.x = spawn.x; player.y = spawn.y; player.yaw = spawn.yaw;
+  initRain();
+  resize();
+  el.hudKeys.innerHTML = '<i>wasd</i> walk   <i>mouse</i> look   <i>shift</i> sprint   <i>e</i> interact   <i>esc</i> release mouse   <i>1-4</i> detail   <i>g</i> glow   <i>r</i> rain   <i>x</i> outlines   <i>m</i> map';
+  setIntro(false);
+  let rt = 0;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 120); });
+  rebuildDynamic(); updateCamera(0.016);
+  requestAnimationFrame(frame);
+  // small debug and test surface
+  window.__city = {
+    player, cam, state, peds, cars, door, interactables, signs, CFG, alleyRuns, buildings,
+    info: () => ({ cols, rows, frameMs, fps: fpsVal, nStatic, nPrim, nLight, lights: nLightS, buildings: buildings.length, gl: !!gl, lightLinks: cStatic, primLinks: lStatic }),
+    ascii: () => { const inv = {}; for (const k in gIndex) inv[gIndex[k]] = k; let s = ''; for (let r = 0; r < rows; r++) { for (let c = 0; c < cols; c++) s += inv[glyphA[r * cols + c]]; s += '\n'; } return s; },
+    step: (dt) => { time += dt; SIG.t += dt; update(dt); renderScene(); blit(); },
+    start: startGame, interact, pause: (v) => { paused = !!v; },
+  };
+}
+boot();
+})();
+</script>
+</body>
+</html>
